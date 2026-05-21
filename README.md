@@ -17,9 +17,10 @@ User Input (keyboard/toolbar) → State Update → Debounce (100ms) → Render �
 2. `loadState()` — restores theme, view mode, content, filename from `localStorage`
 3. `applyTheme()` — sets `data-theme` attribute on `<html>`
 4. `applyViewMode()` — toggles `.hidden` class on panes
-5. `bindEvents()` — attaches all event listeners
-6. `renderPreview()` — renders initial content
-7. `updateFilenameDisplay()` — shows filename badge if present
+5. `configureMarked()` — creates `marked.Marked` instance with custom renderer (heading anchors, link targets)
+6. `bindEvents()` — attaches all event listeners
+7. `renderPreview()` — renders initial content
+8. `updateFilenameDisplay()` — shows filename badge if present
 
 ### State Management
 
@@ -155,11 +156,13 @@ debouncedRender() — clears previous timer, sets 100ms timeout
     ↓
 requestAnimationFrame(renderPreview()) — batches to next paint
     ↓
-marked.parse(content) — converts Markdown to HTML
+mdParser.parse(content) — converts Markdown to HTML (custom marked.Marked instance)
     ↓
 DOMPurify.sanitize(html) — strips dangerous tags/attributes (XSS prevention)
     ↓
 preview.innerHTML = sanitized — updates DOM
+    ↓
+Post-render: inject target="_blank" on all external <a> links
     ↓
 saveState() — persists content to localStorage
 ```
@@ -207,6 +210,16 @@ Implemented via **CSS custom properties** scoped to `:root` and `[data-theme="da
 
 Uses `document.execCommand('undo')` and `document.execCommand('redo')` on the textarea element. The browser's native undo stack tracks all textarea modifications (typing, toolbar insertions, Tab). After each undo/redo, `debouncedRender()` is called to sync the preview.
 
+### Navigation & Anchors
+
+**Heading anchor links**: Every heading in the rendered preview gets an auto-generated `id` (slugified from heading text) and a hover-reveal `#` anchor link positioned to its left. Hovering a heading makes the anchor visible; clicking it copies a link to that section.
+
+**Table of Contents support**: Markdown TOCs with `#` fragment links (e.g., `[Section](#section)`) trigger smooth scrolling within the preview pane. The `handlePreviewClick` event handler intercepts clicks on `a[href^="#"]`, prevents default navigation, and calls `scrollIntoView({ behavior: 'smooth' })` on the target element.
+
+**External links**: All non-fragment links (`href` not starting with `#`) are forced to open in a new browser tab via `target="_blank" rel="noopener noreferrer"`. This is applied as a post-render step after DOMPurify sanitization, ensuring it survives any sanitizer stripping of `target` attributes.
+
+**Slug generation**: Heading IDs are generated from raw heading text by lowercasing, stripping non-alphanumeric characters (except hyphens and spaces), collapsing whitespace into single hyphens, and trimming leading/trailing hyphens. Empty slugs default to `'heading'`.
+
 ### Security
 
 - All rendered Markdown passes through **DOMPurify.sanitize()** before insertion into the DOM
@@ -218,7 +231,7 @@ Uses `document.execCommand('undo')` and `document.execCommand('redo')` on the te
 - **HTML5** — Semantic structure, ARIA labels, hidden file input
 - **CSS3** — Custom properties for theming, flexbox layout, sticky header, responsive media query at `768px`
 - **Vanilla JavaScript (ES6+)** — IIFE pattern, strict mode, arrow functions, async/await, template literals, destructuring
-- **marked.js** (CDN v4.x) — Markdown-to-HTML parser via `marked.parse()`
+- **marked.js** (CDN v15.x) — Markdown-to-HTML parser via `new marked.Marked()` with custom renderer for heading anchors and link handling
 - **DOMPurify** (CDN v3.0.6) — HTML sanitization via `DOMPurify.sanitize()`
 
 ## Getting Started
@@ -262,12 +275,20 @@ md_viewer/
 - `header-left` and `header-right` both have `flex: 1` to center `header-center`
 - Main area: `display: flex; height: calc(100vh - 52px)` for full-viewport minus header
 - Panes: `flex: 1` with `overflow: hidden`; hidden panes collapse via `flex: 0 0 0`
+- Preview pane: `scroll-behavior: smooth` for anchor-based smooth scrolling
 - Responsive: at `≤768px`, header wraps, center section goes full-width below, panes stack vertically
+
+### Heading Anchors
+- Each heading gets a `position: relative` container with an `.anchor` link absolutely positioned to the left
+- Anchors are hidden by default (`opacity: 0`) and revealed on heading hover (`opacity: 1`)
+- Anchor color uses `--accent`, transition uses `--transition`
+- Slug IDs are generated client-side from heading text (lowercase, strip non-word chars, collapse spaces to hyphens)
 
 ### Event Model
 - `document.addEventListener('keydown', ...)` for global shortcuts (delegated, not on specific elements)
 - `elements.editor.addEventListener('input', ...)` for live preview triggering
 - `elements.editor.addEventListener('keydown', handleTabKey)` for Tab interception
+- `elements.preview.addEventListener('click', handlePreviewClick)` for TOC smooth-scroll navigation
 - Toolbar buttons and view buttons use individual `addEventListener('click', ...)`
 - File input uses `change` event
 
@@ -276,8 +297,9 @@ md_viewer/
 2. Textarea value changes
 3. `input` event fires → `debouncedRender()`
 4. After 100ms debounce → `requestAnimationFrame(renderPreview)`
-5. `renderPreview()` reads textarea value, parses Markdown, sanitizes, updates preview DOM
-6. `saveState()` persists content to `localStorage`
+5. `renderPreview()` reads textarea value, parses Markdown via `mdParser`, sanitizes, updates preview DOM
+6. Post-render: all external `<a>` links get `target="_blank" rel="noopener noreferrer"` injected
+7. `saveState()` persists content to `localStorage`
 
 ---
 

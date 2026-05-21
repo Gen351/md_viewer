@@ -48,6 +48,8 @@
 
   let debounceTimer = null;
 
+  let mdParser = null;
+
   function init() {
     cacheElements();
     loadState();
@@ -60,8 +62,6 @@
   }
 
   function configureMarked() {
-    const renderer = new marked.Renderer();
-
     function extractText(tokens) {
       return tokens.map(t => {
         if (t.text && !t.tokens) return t.text;
@@ -70,17 +70,24 @@
       }).join('');
     }
 
-    renderer.heading = function({ tokens, depth }) {
-      const text = this.parser.parseInline(tokens);
-      const rawText = extractText(tokens);
-      const id = rawText.toLowerCase().replace(/[^\w\s-]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'heading';
-      const anchor = `<a class="anchor" href="#${id}" aria-label="Link to this section">#</a>`;
-      return `<h${depth} id="${id}">${anchor}${text}</h${depth}>\n`;
-    };
-
-    marked.setOptions({
-      renderer,
-      gfm: true
+    mdParser = new marked.Marked({
+      renderer: {
+        heading({ tokens, depth }) {
+          const text = this.parser.parseInline(tokens);
+          const rawText = extractText(tokens);
+          const id = rawText.toLowerCase().replace(/[^\w\s-]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'heading';
+          const anchor = `<a class="anchor" href="#${id}" aria-label="Link to this section">#</a>`;
+          return `<h${depth} id="${id}">${anchor}${text}</h${depth}>\n`;
+        },
+        link({ href, title, tokens }) {
+          const text = this.parser.parseInline(tokens);
+          const titleAttr = title ? ` title="${title}"` : '';
+          if (href && href.startsWith('#')) {
+            return `<a href="${href}"${titleAttr}>${text}</a>`;
+          }
+          return `<a href="${href}"${titleAttr} target="_blank" rel="noopener noreferrer">${text}</a>`;
+        }
+      }
     });
   }
 
@@ -189,9 +196,19 @@
       return;
     }
 
-    const html = marked.parse(content);
+    const html = mdParser.parse(content);
     const sanitized = DOMPurify.sanitize(html);
     elements.preview.innerHTML = sanitized;
+
+    const links = elements.preview.querySelectorAll('a[href]');
+    links.forEach(link => {
+      const href = link.getAttribute('href');
+      if (href && !href.startsWith('#') && !link.getAttribute('target')) {
+        link.setAttribute('target', '_blank');
+        link.setAttribute('rel', 'noopener noreferrer');
+      }
+    });
+
     saveState();
   }
 
