@@ -1,0 +1,284 @@
+# Markdown Viewer Editor
+
+A modern, minimal single-page Markdown editor with live preview, built with vanilla HTML, CSS, and JavaScript. No build step, no dependencies to install — just open `index.html` in your browser.
+
+## Architecture Overview
+
+The app is structured as a **single IIFE** (`src/js/app.js`) that encapsulates all logic. It follows a **state-driven, event-based** architecture:
+
+```
+User Input (keyboard/toolbar) → State Update → Debounce (100ms) → Render → Preview
+                                                                              ↓
+                                                                    localStorage persistence
+```
+
+### Initialization Sequence
+1. `cacheElements()` — grabs all DOM references by ID
+2. `loadState()` — restores theme, view mode, content, filename from `localStorage`
+3. `applyTheme()` — sets `data-theme` attribute on `<html>`
+4. `applyViewMode()` — toggles `.hidden` class on panes
+5. `bindEvents()` — attaches all event listeners
+6. `renderPreview()` — renders initial content
+7. `updateFilenameDisplay()` — shows filename badge if present
+
+### State Management
+
+All app state lives in a single `state` object:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `viewMode` | `string` | `'focus'`, `'split'`, or `'view-only'` |
+| `theme` | `string` | `'light'` or `'dark'` |
+| `content` | `string` | Current editor text |
+| `filename` | `string` | Name of the opened/saved file |
+| `fileHandle` | `FileSystemFileHandle \| null` | Handle for direct file writes (File System Access API) |
+
+### localStorage Keys
+
+| Key | Stores |
+|-----|--------|
+| `md-editor-theme` | Current theme (`'light'` / `'dark'`) |
+| `md-editor-view-mode` | Current view mode (`'focus'` / `'split'` / `'view-only'`) |
+| `md-editor-content` | Editor content (auto-saved on every render) |
+| `md-editor-filename` | Last opened filename |
+
+### DOM Element IDs
+
+| ID | Element | Purpose |
+|----|---------|---------|
+| `appMain` | `<main>` | Flex container for editor + preview panes |
+| `editor` | `<textarea>` | Markdown input area |
+| `editorPane` | `<div>` | Left pane wrapper (`.pane.editor-pane`) |
+| `preview` | `<div>` | Rendered HTML output container |
+| `previewPane` | `<div>` | Right pane wrapper (`.pane.preview-pane`) |
+| `btnBold` | `<button>` | Bold formatting |
+| `btnH1` | `<button>` | Heading 1 insertion |
+| `btnItalic` | `<button>` | Italic formatting |
+| `btnList` | `<button>` | Bullet list insertion |
+| `btnLink` | `<button>` | Link insertion |
+| `btnCode` | `<button>` | Inline code formatting |
+| `btnFocus` | `<button>` | Focus view mode |
+| `btnSplit` | `<button>` | Split view mode |
+| `btnViewOnly` | `<button>` | View-only mode |
+| `btnOpen` | `<button>` | Open file picker |
+| `btnSave` | `<button>` | Save file |
+| `btnTheme` | `<button>` | Toggle light/dark theme |
+| `fileInput` | `<input type="file">` | Hidden file input (fallback for open) |
+| `filenameDisplay` | `<span>` | Shows current filename badge |
+
+## Features
+
+### View Modes
+
+Three mutually exclusive modes controlled by CSS class toggling:
+
+| Mode | Editor Pane | Preview Pane | CSS Behavior |
+|------|-------------|--------------|--------------|
+| **Split** | Visible | Visible | Both `flex: 1` |
+| **Focus** | Visible | Hidden | Preview gets `.hidden` → `flex: 0 0 0; opacity: 0; pointer-events: none` |
+| **View-Only** | Hidden | Visible | Editor gets `.hidden` → same collapse behavior |
+
+Mode is persisted in `localStorage` and restored on load. `Escape` key resets to Split.
+
+### Formatting Toolbar
+
+Six toolbar buttons in the header center, separated from view-mode buttons by a vertical divider. Each manipulates the textarea selection:
+
+| Button | Behavior | Wraps Selection? | Placeholder |
+|--------|----------|------------------|-------------|
+| **Bold** | Inserts `**text**` | Yes | `text` |
+| **H1** | Prepends `# ` to current line | No (line-level) | N/A |
+| **Italic** | Inserts `*text*` | Yes | `text` |
+| **Bullet List** | Inserts `- ` at cursor line start | No (line-level) | N/A |
+| **Link** | Inserts `[text](url)` | Yes (wraps, leaves `url` editable) | `text` |
+| **Inline Code** | Inserts `` `text` `` | Yes | `text` |
+
+**Insertion logic** (`insertFormat`):
+1. Gets `selectionStart` / `selectionEnd` from textarea
+2. Extracts selected text (if any)
+3. Builds replacement: `before + (selectedText || 'text') + after`
+4. Uses `setRangeText()` to replace and auto-select the placeholder
+5. Triggers debounced preview render
+
+**Line-level operations** (`insertHeading`, `insertList`):
+1. Finds current line boundaries via `lastIndexOf('\n')` and `indexOf('\n')`
+2. Replaces the entire line content
+3. Positions cursor at end of line
+
+### Keyboard Shortcuts
+
+All shortcuts detect platform (`navigator.platform`) to use `Cmd` on Mac, `Ctrl` on Windows/Linux.
+
+| Shortcut | Handler | Notes |
+|----------|---------|-------|
+| `Ctrl+B` | `insertFormat('**', '**')` | Overrides native bold in textarea |
+| `Ctrl+I` | `insertFormat('*', '*')` | Overrides native italic |
+| `Ctrl+K` | `insertFormat('[', '](url)')` | Inserts link template |
+| `Ctrl+O` | `openFileWithPicker()` | Opens file picker dialog |
+| `Ctrl+S` | `saveFile()` | Opens save dialog or writes to existing handle |
+| `Ctrl+Z` | `document.execCommand('undo')` | Triggers textarea undo, re-renders preview |
+| `Ctrl+Y` | `document.execCommand('redo')` | Triggers textarea redo, re-renders preview |
+| `Ctrl+Shift+Z` | `document.execCommand('redo')` | Alternate redo shortcut |
+| `Ctrl+D` | `toggleTheme()` | Switches between light/dark |
+| `Escape` | `setViewMode('split')` | Resets to split view |
+| `Tab` | Inserts 2 spaces | Overrides native tab focus behavior |
+
+Shortcut handlers call `e.preventDefault()` to suppress default browser behavior.
+
+### File Operations
+
+**Open** (`openFileWithPicker`):
+1. Checks for `window.showOpenFilePicker` support
+2. If available: opens native file picker, reads file via `handle.getFile()` → `file.text()`, stores `fileHandle` for future saves
+3. If unavailable: falls back to hidden `<input type="file">` + `FileReader`
+4. On success: updates editor content, filename, state, preview, and localStorage
+
+**Save** (`saveFile`):
+1. Checks for `window.showSaveFilePicker` support
+2. If `state.fileHandle` exists (file was opened via picker): writes directly to the same file without prompting
+3. If no handle: opens `showSaveFilePicker` dialog with suggested filename, stores the returned handle for future saves
+4. Writes content via `handle.createWritable()` → `writable.write()` → `writable.close()`
+5. On abort: silently ignores
+6. On error or unsupported browser: falls back to `fallbackSave()`
+
+**Fallback Save** (`fallbackSave`):
+- Creates a `Blob` with `text/markdown;charset=utf-8` MIME type
+- Generates object URL, creates temporary `<a>` element with `download` attribute
+- Programmatically clicks it, then removes element and revokes URL
+
+### Live Preview Rendering Pipeline
+
+```
+textarea input event
+    ↓
+debouncedRender() — clears previous timer, sets 100ms timeout
+    ↓
+requestAnimationFrame(renderPreview()) — batches to next paint
+    ↓
+marked.parse(content) — converts Markdown to HTML
+    ↓
+DOMPurify.sanitize(html) — strips dangerous tags/attributes (XSS prevention)
+    ↓
+preview.innerHTML = sanitized — updates DOM
+    ↓
+saveState() — persists content to localStorage
+```
+
+**Empty state**: When content is empty/whitespace-only, renders an SVG icon + "Start typing to see the preview" message instead of calling the parser.
+
+**Debouncing**: 100ms delay prevents excessive parsing on rapid keystrokes. Timer is cleared on each new input event.
+
+**requestAnimationFrame**: Ensures DOM updates happen on the next paint cycle, avoiding layout thrashing.
+
+### Theming System
+
+Implemented via **CSS custom properties** scoped to `:root` and `[data-theme="dark"]`:
+
+| Variable | Light | Dark | Usage |
+|----------|-------|------|-------|
+| `--bg-primary` | `#ffffff` | `#1a1b1e` | Editor background, body |
+| `--bg-secondary` | `#f8f9fa` | `#25262b` | Preview pane background |
+| `--bg-tertiary` | `#e9ecef` | `#2c2e33` | Buttons, badges, blockquotes |
+| `--bg-header` | `#ffffff` | `#1a1b1e` | Header background |
+| `--text-primary` | `#212529` | `#e4e5e7` | Main text color |
+| `--text-secondary` | `#495057` | `#b4b6ba` | Secondary text |
+| `--text-muted` | `#6c757d` | `#8b8d92` | Placeholder, filename badge |
+| `--border-color` | `#dee2e6` | `#373a40` | Borders, dividers |
+| `--border-light` | `#e9ecef` | `#2c2e33` | Subtle borders (h2, pre) |
+| `--accent` | `#4263eb` | `#5c7cfa` | Active buttons, links, links hover |
+| `--accent-hover` | `#3b5bdb` | `#748ffc` | Button hover state |
+| `--accent-light` | `#edf2ff` | `#1c2333` | Active button background |
+| `--code-bg` | `#f1f3f5` | `#2c2e33` | Inline code and code blocks |
+| `--shadow-sm` | `0 1px 2px rgba(0,0,0,0.05)` | `0 1px 2px rgba(0,0,0,0.2)` | Header shadow |
+| `--shadow-md` | `0 4px 6px rgba(0,0,0,0.07)` | `0 4px 6px rgba(0,0,0,0.3)` | Elevated elements |
+| `--radius-sm` | `6px` | — | Buttons, badges |
+| `--radius-md` | `8px` | — | Code blocks, images |
+| `--radius-lg` | `12px` | — | Cards (unused) |
+| `--transition` | `0.2s ease` | — | All animated transitions |
+| `--font-mono` | SF Mono, Fira Code, Cascadia Code, Consolas | — | Editor, code |
+| `--font-sans` | System font stack | — | UI text |
+
+**Theme toggle logic**:
+- Button swaps `data-theme` attribute on `<html>` between `'light'` and `'dark'`
+- Sun/moon icons swap visibility via CSS (`[data-theme="dark"] .icon-sun { display: block }`)
+- All themed properties transition smoothly via `transition: background/var(--transition), color/var(--transition)`
+
+### Undo / Redo
+
+Uses `document.execCommand('undo')` and `document.execCommand('redo')` on the textarea element. The browser's native undo stack tracks all textarea modifications (typing, toolbar insertions, Tab). After each undo/redo, `debouncedRender()` is called to sync the preview.
+
+### Security
+
+- All rendered Markdown passes through **DOMPurify.sanitize()** before insertion into the DOM
+- Prevents XSS from malicious Markdown content (script tags, event handlers, javascript: URLs)
+- Uses DOMPurify v3.0.6 from jsDelivr CDN
+
+## Tech Stack
+
+- **HTML5** — Semantic structure, ARIA labels, hidden file input
+- **CSS3** — Custom properties for theming, flexbox layout, sticky header, responsive media query at `768px`
+- **Vanilla JavaScript (ES6+)** — IIFE pattern, strict mode, arrow functions, async/await, template literals, destructuring
+- **marked.js** (CDN v4.x) — Markdown-to-HTML parser via `marked.parse()`
+- **DOMPurify** (CDN v3.0.6) — HTML sanitization via `DOMPurify.sanitize()`
+
+## Getting Started
+
+1. Clone or download the repository
+2. Open `index.html` directly in a browser
+3. Start writing
+
+No server, no `npm install`, no build tooling required.
+
+## Browser Support
+
+| Feature | Chromium (Chrome, Edge, Opera) | Firefox | Safari |
+|---------|-------------------------------|---------|--------|
+| File System Access API (save dialog) | Full support | Not supported | Not supported |
+| File System Access API (open dialog) | Full support | Not supported | Not supported |
+| Direct file writes | Full support | Not supported | Not supported |
+| Fallback download mode | Available | Used | Used |
+| Editing and preview | Full support | Full support | Full support |
+| `document.execCommand` (undo/redo) | Supported | Supported | Supported |
+
+## Project Structure
+
+```
+md_viewer/
+├── index.html              # Single-page entry point, CDN scripts, header UI
+├── src/
+│   ├── css/
+│   │   └── styles.css      # All styles: theme vars, layout, components, responsive
+│   └── js/
+│       └── app.js          # All application logic in a single IIFE
+├── README.md               # This file
+├── AGENTS.md               # AI agent instructions and project conventions
+└── DEVELOPMENT_PLAN.md     # Phased development task breakdown
+```
+
+## Key Implementation Details
+
+### Layout
+- Header: `position: sticky; top: 0; z-index: 100` with three-section flex layout (`header-left`, `header-center`, `header-right`)
+- `header-left` and `header-right` both have `flex: 1` to center `header-center`
+- Main area: `display: flex; height: calc(100vh - 52px)` for full-viewport minus header
+- Panes: `flex: 1` with `overflow: hidden`; hidden panes collapse via `flex: 0 0 0`
+- Responsive: at `≤768px`, header wraps, center section goes full-width below, panes stack vertically
+
+### Event Model
+- `document.addEventListener('keydown', ...)` for global shortcuts (delegated, not on specific elements)
+- `elements.editor.addEventListener('input', ...)` for live preview triggering
+- `elements.editor.addEventListener('keydown', handleTabKey)` for Tab interception
+- Toolbar buttons and view buttons use individual `addEventListener('click', ...)`
+- File input uses `change` event
+
+### Content Flow
+1. User types or clicks toolbar button
+2. Textarea value changes
+3. `input` event fires → `debouncedRender()`
+4. After 100ms debounce → `requestAnimationFrame(renderPreview)`
+5. `renderPreview()` reads textarea value, parses Markdown, sanitizes, updates preview DOM
+6. `saveState()` persists content to `localStorage`
+
+---
+
+P.S. This app was built by **opencode**, an AI-powered CLI coding assistant developed by [Anomaly](https://github.com/anomalyco/opencode), powered by the **qwen3.6-plus-free** model.
