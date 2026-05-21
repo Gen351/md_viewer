@@ -246,6 +246,7 @@ html, body {
 .preview-pane {
   background: var(--bg-secondary);
   overflow-y: auto;
+  scroll-behavior: smooth;
 }
 
 .preview {
@@ -262,6 +263,23 @@ html, body {
   font-weight: 600;
   line-height: 1.3;
   color: var(--text-primary);
+  position: relative;
+}
+
+.preview h1 .anchor, .preview h2 .anchor, .preview h3 .anchor,
+.preview h4 .anchor, .preview h5 .anchor, .preview h6 .anchor {
+  position: absolute;
+  left: -1.5rem;
+  opacity: 0;
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 400;
+  transition: opacity var(--transition);
+}
+
+.preview h1:hover .anchor, .preview h2:hover .anchor, .preview h3:hover .anchor,
+.preview h4:hover .anchor, .preview h5:hover .anchor, .preview h6:hover .anchor {
+  opacity: 1;
 }
 
 .preview h1 { font-size: 2rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem; }

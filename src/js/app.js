@@ -53,9 +53,35 @@
     loadState();
     applyTheme();
     applyViewMode();
+    configureMarked();
     bindEvents();
     renderPreview();
     updateFilenameDisplay();
+  }
+
+  function configureMarked() {
+    const renderer = new marked.Renderer();
+
+    function extractText(tokens) {
+      return tokens.map(t => {
+        if (t.text && !t.tokens) return t.text;
+        if (t.tokens) return extractText(t.tokens);
+        return t.raw || '';
+      }).join('');
+    }
+
+    renderer.heading = function({ tokens, depth }) {
+      const text = this.parser.parseInline(tokens);
+      const rawText = extractText(tokens);
+      const id = rawText.toLowerCase().replace(/[^\w\s-]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'heading';
+      const anchor = `<a class="anchor" href="#${id}" aria-label="Link to this section">#</a>`;
+      return `<h${depth} id="${id}">${anchor}${text}</h${depth}>\n`;
+    };
+
+    marked.setOptions({
+      renderer,
+      gfm: true
+    });
   }
 
   function cacheElements() {
@@ -346,6 +372,23 @@
     document.addEventListener('keydown', handleKeyboardShortcuts);
 
     elements.editor.addEventListener('keydown', handleTabKey);
+
+    elements.preview.addEventListener('click', handlePreviewClick);
+  }
+
+  function handlePreviewClick(e) {
+    const link = e.target.closest('a');
+    if (!link) return;
+
+    const href = link.getAttribute('href');
+    if (!href || !href.startsWith('#')) return;
+
+    e.preventDefault();
+    const targetId = href.slice(1);
+    const target = elements.preview.querySelector(`[id="${targetId}"], [id="${decodeURIComponent(targetId)}"]`);
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   }
 
   function handleKeyboardShortcuts(e) {
