@@ -116,8 +116,38 @@
   function loadState() {
     state.theme = localStorage.getItem(STORAGE_KEYS.THEME) || 'light';
     state.viewMode = localStorage.getItem(STORAGE_KEYS.VIEW_MODE) || VIEW_MODES.SPLIT;
-    state.content = localStorage.getItem(STORAGE_KEYS.CONTENT) || '';
-    state.filename = localStorage.getItem(STORAGE_KEYS.FILENAME) || '';
+
+    // Check if content was passed via URL hash (cross-origin import)
+    let hashContent = '';
+    let hashFilename = '';
+    try {
+      const hash = window.location.hash.substring(1);
+      if (hash) {
+        const params = new URLSearchParams(hash);
+        if (params.has('content')) {
+          hashContent = decodeURIComponent(params.get('content'));
+        }
+        if (params.has('filename')) {
+          hashFilename = decodeURIComponent(params.get('filename'));
+        }
+      }
+    } catch (e) {
+      console.error('Failed to parse content from URL hash:', e);
+    }
+
+    if (hashContent) {
+      state.content = hashContent;
+      state.filename = hashFilename || 'imported.md';
+      // Persist the imported content to local storage
+      localStorage.setItem(STORAGE_KEYS.CONTENT, state.content);
+      localStorage.setItem(STORAGE_KEYS.FILENAME, state.filename);
+      // Clean up the hash in the browser address bar
+      history.replaceState(null, document.title, window.location.pathname + window.location.search);
+    } else {
+      state.content = localStorage.getItem(STORAGE_KEYS.CONTENT) || '';
+      state.filename = localStorage.getItem(STORAGE_KEYS.FILENAME) || '';
+    }
+
     elements.editor.value = state.content;
   }
 
