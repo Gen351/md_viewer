@@ -50,6 +50,10 @@
 
   let mdParser = null;
 
+  // Tracks slug usage per render so duplicate headings get unique ids
+  // (setup, setup-1, setup-2). Cleared at the start of every renderPreview().
+  let slugCounts = new Map();
+
   function init() {
     cacheElements();
     loadState();
@@ -75,7 +79,10 @@
         heading({ tokens, depth }) {
           const text = this.parser.parseInline(tokens);
           const rawText = extractText(tokens);
-          const id = rawText.toLowerCase().replace(/[^\w\s-]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'heading';
+          const base = rawText.toLowerCase().normalize('NFKD').replace(/[^\p{L}\p{N}\s-]/gu, '').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'heading';
+          const seen = slugCounts.get(base) || 0;
+          slugCounts.set(base, seen + 1);
+          const id = seen === 0 ? base : `${base}-${seen}`;
           const anchor = `<a class="anchor" href="#${id}" aria-label="Link to this section">#</a>`;
           return `<h${depth} id="${id}">${anchor}${text}</h${depth}>\n`;
         },
@@ -123,12 +130,15 @@
     try {
       const hash = window.location.hash.substring(1);
       if (hash) {
+        // URLSearchParams.get() already percent-decodes once. Do NOT wrap
+        // it in decodeURIComponent(): a literal '%' in the content (e.g.
+        // "100% sure") would throw URIError and silently drop the import.
         const params = new URLSearchParams(hash);
         if (params.has('content')) {
-          hashContent = decodeURIComponent(params.get('content'));
+          hashContent = params.get('content') || '';
         }
         if (params.has('filename')) {
-          hashFilename = decodeURIComponent(params.get('filename'));
+          hashFilename = params.get('filename') || '';
         }
       }
     } catch (e) {
@@ -189,6 +199,25 @@
         break;
     }
 
+    // Remove hidden panes from keyboard focus and assistive tech.
+    // `inert` blocks tab/focus traversal; `aria-hidden` hides from AT.
+    // CSS `visibility: hidden` covers browsers without `inert` support.
+    // If focus is inside the pane being hidden, the browser moves it to <body>.
+    const editorHidden = editorPane.classList.contains('hidden');
+    const previewHidden = previewPane.classList.contains('hidden');
+    editorPane.inert = editorHidden;
+    previewPane.inert = previewHidden;
+    if (editorHidden) {
+      editorPane.setAttribute('aria-hidden', 'true');
+    } else {
+      editorPane.removeAttribute('aria-hidden');
+    }
+    if (previewHidden) {
+      previewPane.setAttribute('aria-hidden', 'true');
+    } else {
+      previewPane.removeAttribute('aria-hidden');
+    }
+
     updateViewButtons();
     localStorage.setItem(STORAGE_KEYS.VIEW_MODE, state.viewMode);
   }
@@ -226,6 +255,9 @@
       return;
     }
 
+    // Reset per-render so ids are stable across keystrokes and duplicates
+    // within this document still dedup (setup, setup-1, ...).
+    slugCounts.clear();
     const html = mdParser.parse(content);
     const sanitized = DOMPurify.sanitize(html);
     elements.preview.innerHTML = sanitized;
@@ -256,6 +288,11 @@
   function handleFileSelect(event) {
     const file = event.target.files[0];
     if (!file) return;
+
+    // Fallback open has no writable handle: drop any stale File System
+    // Access handle so the next save doesn't silently overwrite a
+    // previously picker-opened file with this file's content.
+    state.fileHandle = null;
 
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -439,45 +476,50 @@
   }
 
   function handleKeyboardShortcuts(e) {
-    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+    // navigator.platform is deprecated: prefer User-Agent Client Hints,
+    // fall back to userAgent, then legacy platform if present.
+    const platform = (navigator.userAgentData && navigator.userAgentData.platform) ||
+      navigator.userAgent || navigator.platform || '';
+    const isMac = platform.toUpperCase().indexOf('MAC') >= 0;
     const modifier = isMac ? e.metaKey : e.ctrlKey;
+    const key = e.key.toLowerCase();
 
-    if (modifier && e.key === 'o') {
+    if (modifier && key === 'o') {
       e.preventDefault();
       openFileWithPicker();
     }
 
-    if (modifier && e.key === 's') {
+    if (modifier && key === 's') {
       e.preventDefault();
       saveFile();
     }
 
-    if (modifier && e.key === 'd') {
+    if (modifier && key === 'd') {
       e.preventDefault();
       toggleTheme();
     }
 
-    if (modifier && e.key === 'b') {
+    if (modifier && key === 'b') {
       e.preventDefault();
       insertFormat('**', '**');
     }
 
-    if (modifier && e.key === 'i') {
+    if (modifier && key === 'i') {
       e.preventDefault();
       insertFormat('*', '*');
     }
 
-    if (modifier && e.key === 'k') {
+    if (modifier && key === 'k') {
       e.preventDefault();
       insertFormat('[', '](url)');
     }
 
-    if (modifier && e.key === 'z' && !e.shiftKey) {
+    if (modifier && key === 'z' && !e.shiftKey) {
       e.preventDefault();
       undo();
     }
 
-    if ((modifier && e.key === 'y') || (modifier && e.shiftKey && e.key === 'z')) {
+    if ((modifier && key === 'y') || (modifier && e.shiftKey && key === 'z')) {
       e.preventDefault();
       redo();
     }

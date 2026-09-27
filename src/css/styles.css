@@ -207,7 +207,8 @@ html, body {
 .pane {
   flex: 1;
   overflow: hidden;
-  transition: flex var(--transition), opacity var(--transition);
+  visibility: visible;
+  transition: flex var(--transition), opacity var(--transition), visibility var(--transition);
 }
 
 .pane.hidden {
@@ -215,6 +216,7 @@ html, body {
   opacity: 0;
   pointer-events: none;
   min-width: 0;
+  visibility: hidden;
 }
 
 .editor-pane {
