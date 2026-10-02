@@ -54,6 +54,12 @@
   // (setup, setup-1, setup-2). Cleared at the start of every renderPreview().
   let slugCounts = new Map();
 
+  // Scroll-sync throttle state: latest pending source/target pair.
+  // Applied on the next animation frame (latest-wins, nothing lost).
+  let scrollSyncQueued = false;
+  let scrollSyncSource = null;
+  let scrollSyncTarget = null;
+
   function init() {
     cacheElements();
     loadState();
@@ -458,6 +464,44 @@
     elements.editor.addEventListener('keydown', handleTabKey);
 
     elements.preview.addEventListener('click', handlePreviewClick);
+
+    elements.editor.addEventListener('scroll', () => syncScroll(elements.editor, elements.previewPane));
+    elements.previewPane.addEventListener('scroll', () => syncScroll(elements.previewPane, elements.editor));
+  }
+
+  function getScrollFraction(el) {
+    const max = el.scrollHeight - el.clientHeight;
+    if (max <= 0) return 0;
+    return Math.min(1, Math.max(0, el.scrollTop / max));
+  }
+
+  function setScrollFraction(el, fraction) {
+    const max = el.scrollHeight - el.clientHeight;
+    if (max <= 0) return;
+    el.scrollTop = fraction * max;
+  }
+
+  // Proportional scroll sync: maps the source's scroll position (0-100%)
+  // onto the target, so panes of different lengths stay aligned and the
+  // longer pane scrolls faster. rAF-throttled (latest-wins); the epsilon
+  // check makes programmatic echoes no-ops, so no feedback loop is possible.
+  function syncScroll(source, target) {
+    scrollSyncSource = source;
+    scrollSyncTarget = target;
+    if (scrollSyncQueued) return;
+    scrollSyncQueued = true;
+    requestAnimationFrame(() => {
+      scrollSyncQueued = false;
+      const src = scrollSyncSource;
+      const dst = scrollSyncTarget;
+      scrollSyncSource = scrollSyncTarget = null;
+      if (!src || !dst) return;
+      if (elements.editorPane.classList.contains('hidden') ||
+          elements.previewPane.classList.contains('hidden')) return;
+      const fraction = getScrollFraction(src);
+      if (Math.abs(fraction - getScrollFraction(dst)) < 0.001) return;
+      setScrollFraction(dst, fraction);
+    });
   }
 
   function handlePreviewClick(e) {

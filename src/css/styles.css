@@ -248,7 +248,9 @@ html, body {
 .preview-pane {
   background: var(--bg-secondary);
   overflow-y: auto;
-  scroll-behavior: smooth;
+  /* No scroll-behavior here: it would animate programmatic scroll-sync
+     updates and make the panes fight. TOC links still smooth-scroll via
+     their explicit scrollIntoView({ behavior: 'smooth' }) call. */
 }
 
 .preview {
