@@ -13,7 +13,8 @@ To solve this, we have configured **Markdown Viewer** to listen for data passed 
 When Markdown Viewer loads:
 1. It detects if there is a `content` parameter in the URL hash.
 2. It decodes the text, saves it directly into **its own local storage**, and displays it in the editor.
-3. It cleans up the URL bar (removing the hash) so refreshing the page does not overwrite future user edits.
+3. It opens in **view-only mode**, so the recipient sees a readable rendered copy first (they can switch to Split or Focus to edit).
+4. It cleans up the URL bar (removing the hash) so refreshing the page does not overwrite future user edits.
 
 ---
 
@@ -69,7 +70,7 @@ document.getElementById('btnOpenMD').addEventListener('click', () => {
 ---
 
 ## 4. How the Markdown Viewer Receives This (For Reference)
-For context, the **Markdown Viewer**'s `src/js/app.js` is already modified to parse and handle this incoming data in its `loadState` function:
+For context, the **Markdown Viewer**'s `src/js/app.js` parses and handles this incoming data in its `loadState` function (current implementation):
 
 ```javascript
 function loadState() {
@@ -82,12 +83,15 @@ function loadState() {
   try {
     const hash = window.location.hash.substring(1);
     if (hash) {
+      // URLSearchParams.get() already percent-decodes once. Do NOT wrap
+      // it in decodeURIComponent(): a literal '%' in the content (e.g.
+      // "100% sure") would throw URIError and silently drop the import.
       const params = new URLSearchParams(hash);
       if (params.has('content')) {
-        hashContent = decodeURIComponent(params.get('content'));
+        hashContent = params.get('content') || '';
       }
       if (params.has('filename')) {
-        hashFilename = decodeURIComponent(params.get('filename'));
+        hashFilename = params.get('filename') || '';
       }
     }
   } catch (e) {
@@ -97,6 +101,10 @@ function loadState() {
   if (hashContent) {
     state.content = hashContent;
     state.filename = hashFilename || 'imported.md';
+    // Shared links open on the rendered preview: the recipient gets a
+    // readable copy first and can switch to Split/Focus to edit.
+    // applyViewMode() (called after loadState in init) persists this.
+    state.viewMode = VIEW_MODES.VIEW_ONLY;
     // Persist the imported content to local storage
     localStorage.setItem(STORAGE_KEYS.CONTENT, state.content);
     localStorage.setItem(STORAGE_KEYS.FILENAME, state.filename);
