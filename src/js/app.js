@@ -171,6 +171,10 @@
     if (hashContent) {
       state.content = hashContent;
       state.filename = hashFilename || 'imported.md';
+      // Shared links open on the rendered preview: the recipient gets a
+      // readable copy first and can switch to Split/Focus to edit.
+      // applyViewMode() (called after loadState in init) persists this.
+      state.viewMode = VIEW_MODES.VIEW_ONLY;
       // Persist the imported content to local storage
       localStorage.setItem(STORAGE_KEYS.CONTENT, state.content);
       localStorage.setItem(STORAGE_KEYS.FILENAME, state.filename);
