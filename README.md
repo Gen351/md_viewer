@@ -63,7 +63,12 @@ All app state lives in a single `state` object:
 | `btnViewOnly` | `<button>` | View-only mode |
 | `btnOpen` | `<button>` | Open file picker |
 | `btnSave` | `<button>` | Save file |
+| `btnShare` | `<button>` | Copy shareable link |
 | `btnTheme` | `<button>` | Toggle light/dark theme |
+| `shareModal` | `<div>` | Share feedback modal overlay (`.modal-overlay`) |
+| `shareModalTitle` | `<h2>` | Modal title |
+| `shareModalMessage` | `<p>` | Modal message |
+| `shareModalClose` | `<button>` | Modal close button |
 | `fileInput` | `<input type="file">` | Hidden file input (fallback for open) |
 | `filenameDisplay` | `<span>` | Shows current filename badge |
 
@@ -80,6 +85,8 @@ Three mutually exclusive modes controlled by CSS class toggling:
 | **View-Only** | Hidden | Visible | Editor gets `.hidden` → same collapse behavior |
 
 Mode is persisted in `localStorage` and restored on load. `Escape` key resets to Split.
+
+Hidden panes are also removed from keyboard focus and assistive tech: the pane gets `inert` + `aria-hidden` (with a CSS `visibility: hidden` fallback for browsers without `inert` support), so Tab traversal and screen readers never enter a hidden pane.
 
 ### Formatting Toolbar
 
@@ -108,7 +115,7 @@ Six toolbar buttons in the header center, separated from view-mode buttons by a 
 
 ### Keyboard Shortcuts
 
-All shortcuts detect platform (`navigator.platform`) to use `Cmd` on Mac, `Ctrl` on Windows/Linux.
+All shortcuts detect the platform (User-Agent Client Hints, falling back to `navigator.userAgent` / legacy `navigator.platform`) to use `Cmd` on Mac, `Ctrl` on Windows/Linux.
 
 | Shortcut | Handler | Notes |
 |----------|---------|-------|
@@ -121,7 +128,7 @@ All shortcuts detect platform (`navigator.platform`) to use `Cmd` on Mac, `Ctrl`
 | `Ctrl+Y` | `document.execCommand('redo')` | Triggers textarea redo, re-renders preview |
 | `Ctrl+Shift+Z` | `document.execCommand('redo')` | Alternate redo shortcut |
 | `Ctrl+D` | `toggleTheme()` | Switches between light/dark |
-| `Escape` | `setViewMode('split')` | Resets to split view |
+| `Escape` | Closes the share modal if open, otherwise `setViewMode('split')` | Closes modal or resets to split view |
 | `Tab` | Inserts 2 spaces | Overrides native tab focus behavior |
 
 Shortcut handlers call `e.preventDefault()` to suppress default browser behavior.
@@ -146,6 +153,28 @@ Shortcut handlers call `e.preventDefault()` to suppress default browser behavior
 - Creates a `Blob` with `text/markdown;charset=utf-8` MIME type
 - Generates object URL, creates temporary `<a>` element with `download` attribute
 - Programmatically clicks it, then removes element and revokes URL
+
+### Sharing & Link Import
+
+**Share** (`shareFile`):
+1. Builds a share link from the page URL plus a URL fragment: `#content=<encoded>&filename=<encoded>`
+2. Content travels only in the fragment — never sent to any server — so links work for both hosted and `file://` URLs
+3. If the link would exceed `SHARE_URL_MAX_LENGTH` (8,000 chars), a modal explains the file is too big to share by link and suggests saving the `.md` file instead
+4. Copies the link via `navigator.clipboard`, with a hidden-textarea + `execCommand('copy')` fallback for non-secure contexts like `file://`
+5. If the clipboard is blocked, the link is placed in the address bar and a modal tells the user to copy it manually
+6. On success the Share button flashes "Copied!" for 1.5s
+
+**Link import** (`loadState`, on load):
+1. Checks whether the URL hash carries `content` / `filename` params (`URLSearchParams` decodes exactly once — a second `decodeURIComponent` would break content containing literal `%`)
+2. If found: imports content + filename into state, opens **view-only** mode (the recipient sees a rendered copy first and can switch to Split/Focus to edit), persists to `localStorage`, and strips the hash with `history.replaceState` so refreshing the page does not overwrite later edits
+3. This is also the cross-origin hand-off used by other apps to send text in — see `docs/instruction.md` for the InPlainSite integration guide
+
+### Scroll Sync
+
+Scrolling either pane proportionally scrolls the other (`syncScroll`):
+- Maps the source's scroll fraction (0–100%) onto the target, so panes of different lengths stay aligned and the longer pane scrolls faster
+- Throttled with `requestAnimationFrame` (latest-wins); an epsilon check makes programmatic echoes no-ops, so a feedback loop is impossible
+- Disabled entirely while either pane is hidden (Focus / View-Only modes)
 
 ### Live Preview Rendering Pipeline
 
@@ -212,13 +241,13 @@ Uses `document.execCommand('undo')` and `document.execCommand('redo')` on the te
 
 ### Navigation & Anchors
 
-**Heading anchor links**: Every heading in the rendered preview gets an auto-generated `id` (slugified from heading text) and a hover-reveal `#` anchor link positioned to its left. Hovering a heading makes the anchor visible; clicking it copies a link to that section.
+**Heading anchor links**: Every heading in the rendered preview gets an auto-generated `id` (slugified from heading text) and a hover-reveal `#` anchor link positioned to its left. Hovering a heading makes the anchor visible; clicking it smooth-scrolls to that section.
 
 **Table of Contents support**: Markdown TOCs with `#` fragment links (e.g., `[Section](#section)`) trigger smooth scrolling within the preview pane. The `handlePreviewClick` event handler intercepts clicks on `a[href^="#"]`, prevents default navigation, and calls `scrollIntoView({ behavior: 'smooth' })` on the target element.
 
 **External links**: All non-fragment links (`href` not starting with `#`) are forced to open in a new browser tab via `target="_blank" rel="noopener noreferrer"`. This is applied as a post-render step after DOMPurify sanitization, ensuring it survives any sanitizer stripping of `target` attributes.
 
-**Slug generation**: Heading IDs are generated from raw heading text by lowercasing, stripping non-alphanumeric characters (except hyphens and spaces), collapsing whitespace into single hyphens, and trimming leading/trailing hyphens. Empty slugs default to `'heading'`.
+**Slug generation**: Heading IDs are generated from raw heading text by lowercasing, stripping non-alphanumeric characters (except hyphens and spaces), collapsing whitespace into single hyphens, and trimming leading/trailing hyphens. Empty slugs default to `'heading'`. Duplicate slugs within one document get numeric suffixes (`setup`, `setup-1`, `setup-2`); the counter resets on every render so IDs stay stable across keystrokes.
 
 ### Security
 
@@ -231,7 +260,7 @@ Uses `document.execCommand('undo')` and `document.execCommand('redo')` on the te
 - **HTML5** — Semantic structure, ARIA labels, hidden file input
 - **CSS3** — Custom properties for theming, flexbox layout, sticky header, responsive media query at `768px`
 - **Vanilla JavaScript (ES6+)** — IIFE pattern, strict mode, arrow functions, async/await, template literals, destructuring
-- **marked.js** (CDN v15.x) — Markdown-to-HTML parser via `new marked.Marked()` with custom renderer for heading anchors and link handling
+- **marked.js** (latest release, jsDelivr CDN, unpinned) — Markdown-to-HTML parser via `new marked.Marked()` with custom renderer for heading anchors and link handling
 - **DOMPurify** (CDN v3.0.6) — HTML sanitization via `DOMPurify.sanitize()`
 
 ## Getting Started
@@ -263,9 +292,12 @@ md_viewer/
 │   │   └── styles.css      # All styles: theme vars, layout, components, responsive
 │   └── js/
 │       └── app.js          # All application logic in a single IIFE
+├── docs/
+│   ├── DEVELOPMENT_PLAN.md # Phased build plan (completed)
+│   ├── instruction.md      # InPlainSite → share-link integration guide
+│   └── MARKDOWN_VIEWER_EDITOR.md  # Initial design brief
 ├── README.md               # This file
-├── AGENTS.md               # AI agent instructions and project conventions
-└── DEVELOPMENT_PLAN.md     # Phased development task breakdown
+└── AGENTS.md               # AI agent instructions and project conventions
 ```
 
 ## Key Implementation Details
@@ -303,4 +335,4 @@ md_viewer/
 
 ---
 
-P.S. This app was built by **opencode**, an AI-powered CLI coding assistant developed by [Anomaly](https://github.com/anomalyco/opencode), powered by the **qwen3.6-plus-free** model.
+P.S. This app was initially built by **opencode**, an AI-powered CLI coding assistant developed by [Anomaly](https://github.com/anomalyco/opencode), powered by the **qwen3.6-plus-free** model, and later extended with new features using newer models.
