@@ -16,6 +16,13 @@
 
   const DEBOUNCE_DELAY = 100;
 
+  // Max total length (chars) of a generated share link. The file travels in
+  // the URL fragment, which is never sent to a server, so only browser-side
+  // limits apply (Chromium hard cap: 2MB; Firefox history: 2000 chars;
+  // Safari: effectively uncapped). 8000 stays safe everywhere and pastes
+  // cleanly into chat apps.
+  const SHARE_URL_MAX_LENGTH = 8000;
+
   const state = {
     viewMode: VIEW_MODES.SPLIT,
     theme: 'light',
@@ -41,9 +48,14 @@
     btnViewOnly: null,
     btnOpen: null,
     btnSave: null,
+    btnShare: null,
     btnTheme: null,
     fileInput: null,
-    filenameDisplay: null
+    filenameDisplay: null,
+    shareModal: null,
+    shareModalTitle: null,
+    shareModalMessage: null,
+    shareModalClose: null
   };
 
   let debounceTimer = null;
@@ -121,9 +133,14 @@
     elements.btnViewOnly = document.getElementById('btnViewOnly');
     elements.btnOpen = document.getElementById('btnOpen');
     elements.btnSave = document.getElementById('btnSave');
+    elements.btnShare = document.getElementById('btnShare');
     elements.btnTheme = document.getElementById('btnTheme');
     elements.fileInput = document.getElementById('fileInput');
     elements.filenameDisplay = document.getElementById('filenameDisplay');
+    elements.shareModal = document.getElementById('shareModal');
+    elements.shareModalTitle = document.getElementById('shareModalTitle');
+    elements.shareModalMessage = document.getElementById('shareModalMessage');
+    elements.shareModalClose = document.getElementById('shareModalClose');
   }
 
   function loadState() {
@@ -379,6 +396,85 @@
     URL.revokeObjectURL(url);
   }
 
+  function buildShareLink(content, filename) {
+    // Strip any existing hash so the base works for both hosted
+    // (https://…/index.html) and file:// URLs.
+    const base = window.location.href.split('#')[0];
+    return base + '#content=' + encodeURIComponent(content) +
+      '&filename=' + encodeURIComponent(filename);
+  }
+
+  async function copyText(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+    // Fallback for non-secure contexts (e.g. file://): hidden textarea + execCommand.
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+  }
+
+  function isShareModalOpen() {
+    return elements.shareModal && !elements.shareModal.classList.contains('hidden');
+  }
+
+  function openShareModal(title, message) {
+    elements.shareModalTitle.textContent = title;
+    elements.shareModalMessage.textContent = message;
+    elements.shareModal.classList.remove('hidden');
+    elements.shareModalClose.focus();
+  }
+
+  function closeShareModal() {
+    elements.shareModal.classList.add('hidden');
+    if (elements.btnShare) elements.btnShare.focus();
+  }
+
+  async function shareFile() {
+    const content = elements.editor.value;
+    if (!content.trim()) {
+      openShareModal('Nothing to share', 'The editor is empty. Write something first, then share it.');
+      return;
+    }
+
+    const filename = state.filename || 'untitled.md';
+    const link = buildShareLink(content, filename);
+
+    if (link.length > SHARE_URL_MAX_LENGTH) {
+      openShareModal(
+        'File too big to share with a link',
+        'This file would make a ' + link.length.toLocaleString() + '-character link, ' +
+        'but links are limited to ' + SHARE_URL_MAX_LENGTH.toLocaleString() + ' characters. ' +
+        'Save it as a .md file and send the file instead.'
+      );
+      return;
+    }
+
+    try {
+      await copyText(link);
+      flashShareButton();
+    } catch (e) {
+      // Last resort: put the link in the address bar so it can be copied manually.
+      window.location.hash = link.substring(link.indexOf('#') + 1);
+      openShareModal('Could not copy automatically', 'Your browser blocked copying, so the share link was placed in the address bar instead — copy it from there manually.');
+    }
+  }
+
+  function flashShareButton() {
+    const btn = elements.btnShare;
+    if (!btn) return;
+    const original = btn.innerHTML;
+    btn.innerHTML = 'Copied!';
+    setTimeout(() => { btn.innerHTML = original; }, 1500);
+  }
+
   function undo() {
     elements.editor.focus();
     document.execCommand('undo');
@@ -455,7 +551,13 @@
 
     elements.btnOpen.addEventListener('click', openFileWithPicker);
     elements.btnSave.addEventListener('click', saveFile);
+    elements.btnShare.addEventListener('click', shareFile);
     elements.fileInput.addEventListener('change', handleFileSelect);
+
+    elements.shareModalClose.addEventListener('click', closeShareModal);
+    elements.shareModal.addEventListener('click', (e) => {
+      if (e.target === elements.shareModal) closeShareModal();
+    });
 
     elements.btnTheme.addEventListener('click', toggleTheme);
 
@@ -569,6 +671,13 @@
     }
 
     if (e.key === 'Escape') {
+      // An open modal consumes Escape first so dismissing it doesn't
+      // also yank the view mode back to split.
+      if (isShareModalOpen()) {
+        e.preventDefault();
+        closeShareModal();
+        return;
+      }
       setViewMode(VIEW_MODES.SPLIT);
     }
   }
