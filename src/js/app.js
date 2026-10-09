@@ -5,13 +5,23 @@
     THEME: 'md-editor-theme',
     VIEW_MODE: 'md-editor-view-mode',
     CONTENT: 'md-editor-content',
-    FILENAME: 'md-editor-filename'
+    FILENAME: 'md-editor-filename',
+    MATH_MODE: 'md-editor-math-mode'
   };
 
   const VIEW_MODES = {
     FOCUS: 'focus',
     SPLIT: 'split',
     VIEW_ONLY: 'view-only'
+  };
+
+  const MATH_MODES = {
+    OFF: 'off',
+    INLINE: 'inline',
+    DISPLAY: 'display',
+    DOLLARS: 'dollars',
+    LATEX: 'latex',
+    ALL: 'all'
   };
 
   const DEBOUNCE_DELAY = 100;
@@ -28,7 +38,8 @@
     theme: 'light',
     content: '',
     filename: '',
-    fileHandle: null
+    fileHandle: null,
+    mathMode: MATH_MODES.OFF
   };
 
   const elements = {
@@ -55,7 +66,9 @@
     shareModal: null,
     shareModalTitle: null,
     shareModalMessage: null,
-    shareModalClose: null
+    shareModalClose: null,
+    mathMode: null,
+    mathjaxScript: null
   };
 
   let debounceTimer = null;
@@ -72,11 +85,17 @@
   let scrollSyncSource = null;
   let scrollSyncTarget = null;
 
+  // Math (LaTeX) state: placeholder records for the current render, plus
+  // nodes waiting for MathJax when the library hasn't finished loading yet.
+  let pendingMaths = [];
+  let queuedMathNodes = [];
+
   function init() {
     cacheElements();
     loadState();
     applyTheme();
     applyViewMode();
+    applyMathMode();
     configureMarked();
     bindEvents();
     renderPreview();
@@ -141,11 +160,17 @@
     elements.shareModalTitle = document.getElementById('shareModalTitle');
     elements.shareModalMessage = document.getElementById('shareModalMessage');
     elements.shareModalClose = document.getElementById('shareModalClose');
+    elements.mathMode = document.getElementById('mathMode');
+    elements.mathjaxScript = document.getElementById('mathjaxScript');
   }
 
   function loadState() {
     state.theme = localStorage.getItem(STORAGE_KEYS.THEME) || 'light';
     state.viewMode = localStorage.getItem(STORAGE_KEYS.VIEW_MODE) || VIEW_MODES.SPLIT;
+    state.mathMode = localStorage.getItem(STORAGE_KEYS.MATH_MODE) || MATH_MODES.OFF;
+    if (!Object.values(MATH_MODES).includes(state.mathMode)) {
+      state.mathMode = MATH_MODES.OFF;
+    }
 
     // Check if content was passed via URL hash (cross-origin import)
     let hashContent = '';
@@ -262,6 +287,232 @@
     btnViewOnly.classList.toggle('active', state.viewMode === VIEW_MODES.VIEW_ONLY);
   }
 
+  // Order used by Ctrl+M to cycle through the math modes.
+  const MATH_MODE_ORDER = [
+    MATH_MODES.OFF,
+    MATH_MODES.INLINE,
+    MATH_MODES.DISPLAY,
+    MATH_MODES.DOLLARS,
+    MATH_MODES.LATEX,
+    MATH_MODES.ALL
+  ];
+
+  function mathDelimitersActive() {
+    switch (state.mathMode) {
+      case MATH_MODES.INLINE: return { inlineDollar: true, displayDollar: false, latex: false };
+      case MATH_MODES.DISPLAY: return { inlineDollar: false, displayDollar: true, latex: false };
+      case MATH_MODES.DOLLARS: return { inlineDollar: true, displayDollar: true, latex: false };
+      case MATH_MODES.LATEX: return { inlineDollar: false, displayDollar: false, latex: true };
+      case MATH_MODES.ALL: return { inlineDollar: true, displayDollar: true, latex: true };
+      default: return { inlineDollar: false, displayDollar: false, latex: false };
+    }
+  }
+
+  function applyMathMode() {
+    if (elements.mathMode) elements.mathMode.value = state.mathMode;
+    localStorage.setItem(STORAGE_KEYS.MATH_MODE, state.mathMode);
+  }
+
+  function setMathMode(mode) {
+    if (!Object.values(MATH_MODES).includes(mode)) return;
+    state.mathMode = mode;
+    applyMathMode();
+    renderPreview();
+  }
+
+  function cycleMathMode() {
+    const next = MATH_MODE_ORDER[(MATH_MODE_ORDER.indexOf(state.mathMode) + 1) % MATH_MODE_ORDER.length];
+    setMathMode(next);
+  }
+
+  function handleMathModeChange(e) {
+    setMathMode(e.target.value);
+  }
+
+  // Splits markdown source into { text, isCode } segments so math
+  // extraction never touches fenced code blocks or inline code spans.
+  // Known limitation: indented (4-space) code blocks are not detected —
+  // use fenced blocks for math-heavy documents.
+  function splitCodeSegments(src) {
+    const lines = src.split('\n');
+    const segments = [];
+    let segStart = 0;
+    let fence = null;
+
+    function push(upto, isCode) {
+      if (upto > segStart) {
+        segments.push({ text: lines.slice(segStart, upto).join('\n'), isCode });
+      }
+      segStart = upto;
+    }
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (!fence) {
+        const open = line.match(/^ {0,3}(`{3,}|~{3,})/);
+        if (open) {
+          push(i, false);
+          fence = { ch: open[1][0], len: open[1].length };
+        }
+      } else {
+        const close = line.match(/^ {0,3}(`{3,}|~{3,})\s*$/);
+        if (close && close[1][0] === fence.ch && close[1].length >= fence.len) {
+          push(i + 1, true);
+          fence = null;
+        }
+      }
+    }
+    push(lines.length, !!fence);
+
+    const out = [];
+    for (const seg of segments) {
+      if (seg.isCode) {
+        out.push(seg);
+      } else {
+        splitInlineCode(seg.text, out);
+      }
+    }
+    return out;
+  }
+
+  // Splits plain text on CommonMark code spans: a run of N backticks is
+  // closed by the first later run of exactly N backticks.
+  function splitInlineCode(text, out) {
+    const runs = [];
+    const runRe = /`+/g;
+    let m;
+    while ((m = runRe.exec(text))) runs.push({ index: m.index, len: m[0].length });
+
+    let pos = 0;
+    let i = 0;
+    while (i < runs.length) {
+      let j = i + 1;
+      while (j < runs.length && runs[j].len !== runs[i].len) j++;
+      if (j >= runs.length) break;
+      if (runs[i].index > pos) {
+        out.push({ text: text.slice(pos, runs[i].index), isCode: false });
+      }
+      out.push({ text: text.slice(runs[i].index, runs[j].index + runs[j].len), isCode: true });
+      pos = runs[j].index + runs[j].len;
+      i = j + 1;
+    }
+    if (pos < text.length) out.push({ text: text.slice(pos), isCode: false });
+  }
+
+  // Replaces LaTeX spans in non-code text with placeholder tokens and
+  // records { tex, display } for each. Tokens use private-use Unicode so
+  // user-typed text can never collide with them, and they carry no
+  // markdown meaning through marked or DOMPurify.
+  function extractMath(src, flags) {
+    const maths = [];
+    const parts = splitCodeSegments(src).map(seg => {
+      if (seg.isCode) return seg.text;
+      return extractMathFromText(seg.text, flags, maths);
+    });
+    return { text: parts.join(''), maths };
+  }
+
+  function extractMathFromText(text, flags, maths) {
+    function stash(tex, display) {
+      const id = maths.length;
+      maths.push({ tex, display });
+      return '\uE000MATH' + id + '\uE001';
+    }
+    // Display $$ first so its dollars are never read as two inline opens.
+    if (flags.displayDollar) {
+      text = text.replace(/(?<!\\)\$\$([\s\S]+?)(?<!\\)\$\$/g, (m, tex) => stash(tex, true));
+    }
+    if (flags.latex) {
+      text = text.replace(/(?<!\\)\\\[([\s\S]+?)\\\]/g, (m, tex) => stash(tex, true));
+      text = text.replace(/(?<!\\)\\\(([^\n]+?)\\\)/g, (m, tex) => stash(tex, false));
+    }
+    if (flags.inlineDollar) {
+      // Single-line only (a runaway match across paragraphs stays literal),
+      // no space adjacent to the dollars, closing $ not followed by a digit
+      // (so "$5 and $10" is left alone), dollars next to another dollar or
+      // a backslash never open/close (so "$$x$$" stays literal here).
+      text = text.replace(/(?<!\$)(?<!\\)\$(?!\s)(?!\$)([^\n]+?)(?<!\s)(?<!\$)(?<!\\)\$(?!\d)/g, (m, tex) => stash(tex, false));
+    }
+    return text;
+  }
+
+  const MATH_TOKEN_RE = /\uE000MATH(\d+)\uE001/g;
+
+  // Swaps placeholder tokens back for real <span> nodes holding the raw
+  // TeX wrapped in \(...\) / \[...\], then hands them to MathJax. Nodes
+  // are built with textContent (never innerHTML), and typesetting happens
+  // after DOMPurify — so the XSS guarantee is untouched. Tokens inside
+  // <code>/<pre> are user-typed literals (extraction never runs there).
+  function restoreMathPlaceholders() {
+    const nodes = [];
+    if (!pendingMaths.length || !elements.preview) return nodes;
+
+    const walker = document.createTreeWalker(elements.preview, NodeFilter.SHOW_TEXT);
+    const textNodes = [];
+    let current;
+    while ((current = walker.nextNode())) textNodes.push(current);
+
+    textNodes.forEach(node => {
+      MATH_TOKEN_RE.lastIndex = 0;
+      if (!MATH_TOKEN_RE.test(node.nodeValue)) return;
+      if (node.parentElement && node.parentElement.closest('code, pre')) return;
+
+      MATH_TOKEN_RE.lastIndex = 0;
+      const frag = document.createDocumentFragment();
+      let last = 0;
+      let m;
+      while ((m = MATH_TOKEN_RE.exec(node.nodeValue))) {
+        if (m.index > last) {
+          frag.appendChild(document.createTextNode(node.nodeValue.slice(last, m.index)));
+        }
+        const math = pendingMaths[Number(m[1])];
+        if (math) {
+          const span = document.createElement('span');
+          span.className = math.display ? 'math math-display' : 'math math-inline';
+          span.textContent = math.display ? '\\[' + math.tex + '\\]' : '\\(' + math.tex + '\\)';
+          frag.appendChild(span);
+          nodes.push(span);
+        } else {
+          frag.appendChild(document.createTextNode(m[0]));
+        }
+        last = m.index + m[0].length;
+      }
+      if (last < node.nodeValue.length) {
+        frag.appendChild(document.createTextNode(node.nodeValue.slice(last)));
+      }
+      node.parentNode.replaceChild(frag, node);
+    });
+    return nodes;
+  }
+
+  function typesetMath(nodes) {
+    if (!nodes.length) return;
+    if (window.MathJax && window.MathJax.typesetPromise) {
+      window.MathJax.typesetPromise(nodes).catch(e => {
+        console.error('MathJax typeset failed:', e);
+      });
+    } else {
+      // Library still loading (or blocked): retry once it arrives.
+      // flushQueuedMath keeps only attached, untypeset nodes.
+      queuedMathNodes.push(...nodes);
+    }
+  }
+
+  function flushQueuedMath() {
+    if (!window.MathJax || !window.MathJax.typesetPromise) return;
+    if (!queuedMathNodes.length) return;
+    const live = queuedMathNodes.filter(n => n.isConnected && !n.querySelector('mjx-container'));
+    queuedMathNodes = [];
+    if (live.length) typesetMath(live);
+  }
+
+  function onMathJaxReady() {
+    // The MathJax global exists as soon as our config block runs, but
+    // startup.promise only appears once the library itself executes.
+    if (!window.MathJax || !window.MathJax.startup || !window.MathJax.startup.promise) return;
+    window.MathJax.startup.promise.then(flushQueuedMath);
+  }
+
   function renderPreview() {
     const content = elements.editor.value.trim();
     state.content = elements.editor.value;
@@ -285,7 +536,19 @@
     // Reset per-render so ids are stable across keystrokes and duplicates
     // within this document still dedup (setup, setup-1, ...).
     slugCounts.clear();
-    const html = mdParser.parse(content);
+
+    // Pull LaTeX out before parsing so marked can't mangle it (e.g. the
+    // `*` in `$a*b$` would otherwise become emphasis). The markdown render
+    // itself stays fully synchronous; only the math pass below is async.
+    pendingMaths = [];
+    let source = content;
+    if (state.mathMode !== MATH_MODES.OFF) {
+      const extracted = extractMath(content, mathDelimitersActive());
+      source = extracted.text;
+      pendingMaths = extracted.maths;
+    }
+
+    const html = mdParser.parse(source);
     const sanitized = DOMPurify.sanitize(html);
     elements.preview.innerHTML = sanitized;
 
@@ -297,6 +560,11 @@
         link.setAttribute('rel', 'noopener noreferrer');
       }
     });
+
+    // Swap placeholders back for math nodes and typeset them async.
+    // Markdown is already on screen at this point — MathJax fills in the
+    // formulas as soon as each typeset resolves.
+    typesetMath(restoreMathPlaceholders());
 
     saveState();
   }
@@ -556,6 +824,7 @@
     elements.btnOpen.addEventListener('click', openFileWithPicker);
     elements.btnSave.addEventListener('click', saveFile);
     elements.btnShare.addEventListener('click', shareFile);
+    elements.mathMode.addEventListener('change', handleMathModeChange);
     elements.fileInput.addEventListener('change', handleFileSelect);
 
     elements.shareModalClose.addEventListener('click', closeShareModal);
@@ -570,6 +839,15 @@
     elements.editor.addEventListener('keydown', handleTabKey);
 
     elements.preview.addEventListener('click', handlePreviewClick);
+
+    // MathJax loads with `defer`, so it may arrive after init. Typeset any
+    // nodes queued while it was still loading; the window-load flush covers
+    // the case where the script finished before this listener attached.
+    if (elements.mathjaxScript) {
+      elements.mathjaxScript.addEventListener('load', onMathJaxReady);
+    }
+    window.addEventListener('load', onMathJaxReady);
+    if (window.MathJax) onMathJaxReady();
 
     elements.editor.addEventListener('scroll', () => syncScroll(elements.editor, elements.previewPane));
     elements.previewPane.addEventListener('scroll', () => syncScroll(elements.previewPane, elements.editor));
@@ -662,6 +940,11 @@
     if (modifier && key === 'k') {
       e.preventDefault();
       insertFormat('[', '](url)');
+    }
+
+    if (modifier && key === 'm') {
+      e.preventDefault();
+      cycleMathMode();
     }
 
     if (modifier && key === 'z' && !e.shiftKey) {

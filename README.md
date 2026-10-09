@@ -33,6 +33,7 @@ All app state lives in a single `state` object:
 | `content` | `string` | Current editor text |
 | `filename` | `string` | Name of the opened/saved file |
 | `fileHandle` | `FileSystemFileHandle \| null` | Handle for direct file writes (File System Access API) |
+| `mathMode` | `string` | `'off'`, `'inline'`, `'display'`, `'dollars'`, `'latex'`, or `'all'` |
 
 ### localStorage Keys
 
@@ -42,6 +43,7 @@ All app state lives in a single `state` object:
 | `md-editor-view-mode` | Current view mode (`'focus'` / `'split'` / `'view-only'`) |
 | `md-editor-content` | Editor content (auto-saved on every render) |
 | `md-editor-filename` | Last opened filename |
+| `md-editor-math-mode` | Selected math rendering mode |
 
 ### DOM Element IDs
 
@@ -69,6 +71,8 @@ All app state lives in a single `state` object:
 | `shareModalTitle` | `<h2>` | Modal title |
 | `shareModalMessage` | `<p>` | Modal message |
 | `shareModalClose` | `<button>` | Modal close button |
+| `mathMode` | `<select>` | LaTeX math mode dropdown (`.math-select`) |
+| `mathjaxScript` | `<script>` | MathJax library tag (load detection) |
 | `fileInput` | `<input type="file">` | Hidden file input (fallback for open) |
 | `filenameDisplay` | `<span>` | Shows current filename badge |
 
@@ -128,6 +132,7 @@ All shortcuts detect the platform (User-Agent Client Hints, falling back to `nav
 | `Ctrl+Y` | `document.execCommand('redo')` | Triggers textarea redo, re-renders preview |
 | `Ctrl+Shift+Z` | `document.execCommand('redo')` | Alternate redo shortcut |
 | `Ctrl+D` | `toggleTheme()` | Switches between light/dark |
+| `Ctrl+M` | `cycleMathMode()` | Cycles math mode: Off → $ → $$ → $+$$ → LaTeX → All |
 | `Escape` | Closes the share modal if open, otherwise `setViewMode('split')` | Closes modal or resets to split view |
 | `Tab` | Inserts 2 spaces | Overrides native tab focus behavior |
 
@@ -175,6 +180,28 @@ Scrolling either pane proportionally scrolls the other (`syncScroll`):
 - Maps the source's scroll fraction (0–100%) onto the target, so panes of different lengths stay aligned and the longer pane scrolls faster
 - Throttled with `requestAnimationFrame` (latest-wins); an epsilon check makes programmatic echoes no-ops, so a feedback loop is impossible
 - Disabled entirely while either pane is hidden (Focus / View-Only modes)
+
+### Math (LaTeX) Rendering
+
+Optional LaTeX math via **MathJax v3** (`tex-chtml`, pinned), enabled with the **Math dropdown** in the header (default **Off**, so `$` stays literal text unless you opt in):
+
+| Mode | Active delimiters |
+|------|-------------------|
+| Off | none |
+| `$` | `$…$` inline (`$H_{in}$`) |
+| `$$` | `$$…$$` display (centered block) |
+| `$ + $$` | both dollar forms |
+| `\( \)` / `\[ \]` | LaTeX-style only (immune to currency false positives) |
+| All | everything above |
+
+`Ctrl+M` cycles the modes. The choice persists in `localStorage` (`md-editor-math-mode`).
+
+**How it stays fast and correct:**
+- Before parsing, `extractMath()` pulls LaTeX spans into private-use Unicode placeholders (`U+E000…U+E001`, zero markdown meaning), so `marked` can't mangle them (the `*` in `$a*b$` would otherwise become emphasis). Markdown rendering stays fully synchronous on the 100ms debounce.
+- Fenced code blocks and `` `code spans` `` are never touched. Known limitation: indented (4-space) code blocks are not detected — use fenced blocks in math-heavy docs.
+- After sanitize + `innerHTML`, `restoreMathPlaceholders()` swaps tokens for `<span>` nodes built with `textContent` (never `innerHTML`), then `MathJax.typesetPromise()` typesets **only those nodes**, asynchronously. Markdown is already on screen; formulas fill in as each typeset resolves, and stale typesets from older keystrokes mutate detached nodes and evaporate harmlessly.
+- Delimiter rules: no space adjacent to `$`, closing `$` not followed by a digit (so `$5 and $10` is left alone), `\$` never opens/closes, inline `$` is single-line only, and `$$x$$` stays literal unless a `$$` mode is active.
+- MathJax runs with `startup.typeset: false` so it never scans the whole page; bad TeX renders inline-red instead of crashing the preview; if the CDN is unreachable (offline), raw `$…$` text simply stays visible.
 
 ### Live Preview Rendering Pipeline
 
@@ -261,6 +288,7 @@ Uses `document.execCommand('undo')` and `document.execCommand('redo')` on the te
 - **CSS3** — Custom properties for theming, flexbox layout, sticky header, responsive media query at `768px`
 - **Vanilla JavaScript (ES6+)** — IIFE pattern, strict mode, arrow functions, async/await, template literals, destructuring
 - **marked.js** (latest release, jsDelivr CDN, unpinned) — Markdown-to-HTML parser via `new marked.Marked()` with custom renderer for heading anchors and link handling
+- **MathJax** (pinned v3.2.2, jsDelivr CDN, deferred) — LaTeX math typesetting via targeted async `MathJax.typesetPromise()` on extracted math nodes only
 - **DOMPurify** (CDN v3.0.6) — HTML sanitization via `DOMPurify.sanitize()`
 
 ## Getting Started
@@ -335,4 +363,4 @@ md_viewer/
 
 ---
 
-P.S. This app was initially built by **opencode**, an AI-powered CLI coding assistant developed by [Anomaly](https://github.com/anomalyco/opencode), powered by the **qwen3.6-plus-free** model, and later extended with new features using newer models.
+P.S. This app was initially built by **opencode**, an AI-powered CLI coding assistant developed by [Anomaly](https://github.com/anomalyco/opencode), powered by **Qwen 3.6**, and later extended using **Qwen 3.8:27B**. LaTeX math support was added afterwards with **Muse Spark** (not Qwen 3.8).

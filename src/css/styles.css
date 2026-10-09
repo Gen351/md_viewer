@@ -177,6 +177,30 @@ html, body {
   color: var(--accent);
 }
 
+.math-select {
+  padding: 0.5rem 0.375rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition);
+  font-family: inherit;
+  max-width: 9.5rem;
+}
+
+.math-select:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.math-select option {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
 .btn-theme {
   padding: 0.5rem;
   position: relative;
@@ -390,6 +414,28 @@ html, body {
   height: auto;
   border-radius: var(--radius-md);
   margin: 1rem 0;
+}
+
+/* LaTeX math (MathJax). Display math uses a block span instead of a div
+   so it stays valid inside <p> elements. CHTML inherits the theme's text
+   color via currentColor. */
+.preview .math-display {
+  display: block;
+  text-align: center;
+  margin: 1rem 0;
+  padding: 0.25rem 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.preview mjx-container[jax="CHTML"] {
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+}
+
+.preview mjx-container[display="true"] {
+  margin: 0;
 }
 
 .preview .empty-state {
