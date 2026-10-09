@@ -217,8 +217,8 @@ Optional LaTeX math via **MathJax v3** (`tex-chtml`, pinned), enabled via the **
 Fenced code blocks with an explicit language tag are syntax-highlighted via **highlight.js v11** (common bundle, pinned), e.g. ```` ```cpp ```` or ```` ```python ````. Untagged blocks and `plaintext` / `nohighlight` blocks keep plain styling.
 
 - The tag after the fence picks the language; a custom matcher also accepts `+`, `#`, `.` and `-`, so ```` ```C++ ```` and ```` ```C# ```` resolve through the official alias table (`c++`→cpp, `c#`→csharp). Canonical lowercase tags are still recommended.
-- Highlighting runs post-sanitize on `pre code` nodes only (tagged + supported), so it never touches math spans or inline code and the XSS posture is unchanged. Our own code-block chrome is kept — only token colors come from the highlight.js theme.
-- Every fenced block gets a **Copy** button (top-right; hover/focus reveal on desktop, always visible on touch) that copies the raw code with clipboard + `execCommand` fallback and flashes "Copied!".
+- Highlighting runs post-sanitize on `pre code` nodes only (tagged + supported), so it never touches math spans or inline code and the XSS posture is unchanged. Our own code-block chrome is kept — only token colors come from the highlight.js theme. If the library fails to load (offline/blocked), blocks stay plain with working Copy buttons, and a clear error is logged to the console.
+- Every fenced block gets a **Copy** button (top-right; hover/focus reveal on desktop, always visible on touch) that copies the raw code with clipboard + `execCommand` fallback and flashes "Copied!". Copy buttons are dependency-free (plain DOM, work even if highlight.js fails) and accessible: each block carries its language tag as `aria-label`, and the confirmation is announced via `aria-live`.
 - **Code Themes** submenu (gear menu): `Auto (app theme)` default plus GitHub Light/Dark, Monokai, Dracula, Nord. A single on-demand stylesheet is swapped (`Auto` follows the app theme in `applyTheme()`); the choice persists in `localStorage` (`md-editor-code-theme`).
 
 ### Settings Menu
@@ -311,7 +311,7 @@ Uses `document.execCommand('undo')` and `document.execCommand('redo')` on the te
 - **Vanilla JavaScript (ES6+)** — IIFE pattern, strict mode, arrow functions, async/await, template literals, destructuring
 - **marked.js** (latest release, jsDelivr CDN, unpinned) — Markdown-to-HTML parser via `new marked.Marked()` with custom renderer for heading anchors and link handling
 - **MathJax** (pinned v3.2.2, jsDelivr CDN, deferred) — LaTeX math typesetting via targeted async `MathJax.typesetPromise()` on extracted math nodes only
-- **highlight.js** (pinned v11.9.0 common bundle, jsDelivr CDN, deferred) — code syntax highlighting via `hljs.highlightElement()` on tagged fenced blocks; theme via a single swappable stylesheet
+- **highlight.js** (pinned v11.9.0 common bundle via `@highlightjs/cdn-assets`, jsDelivr CDN, deferred) — code syntax highlighting via `hljs.highlightElement()` on tagged fenced blocks; theme via a single swappable stylesheet; copy buttons and plain code need no library
 - **DOMPurify** (CDN v3.0.6) — HTML sanitization via `DOMPurify.sanitize()`
 
 ## Getting Started

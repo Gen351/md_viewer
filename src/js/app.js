@@ -34,7 +34,7 @@
     NORD: 'nord'
   };
 
-  const HLJS_CDN_BASE = 'https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/';
+  const HLJS_CDN_BASE = 'https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.9.0/styles/';
   const HLJS_AUTO_LIGHT = CODE_THEMES.GITHUB;
   const HLJS_AUTO_DARK = CODE_THEMES.GITHUB_DARK;
 
@@ -468,43 +468,60 @@
     else items[items.length - 1].focus();
   }
 
+  // Adds a Copy button to every fenced code block. Dependency-free on
+  // purpose (plain DOM only): copying keeps working even if highlight.js
+  // failed to load or is blocked.
+  function addCopyButtons() {
+    if (!elements.preview) return;
+    elements.preview.querySelectorAll('pre code').forEach(code => {
+      const pre = code.parentElement;
+      if (!pre || pre.tagName !== 'PRE' || pre.classList.contains('has-copy-btn')) return;
+      pre.classList.add('has-copy-btn');
+      // Accessible name carries the language tag when present, so screen
+      // reader users know what the block (and its button) refers to.
+      const tag = codeTagName(code);
+      pre.setAttribute('aria-label', tag ? tag + ' code' : 'Code block');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'copy-btn';
+      btn.textContent = 'Copy';
+      btn.setAttribute('aria-label', 'Copy ' + (tag ? tag + ' ' : '') + 'code to clipboard');
+      // Announces the "Copied!" confirmation to assistive tech.
+      btn.setAttribute('aria-live', 'polite');
+      btn.addEventListener('click', async () => {
+        try {
+          await copyText(code.textContent);
+          btn.textContent = 'Copied!';
+          setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+        } catch (e) {
+          console.error('Copy failed:', e);
+        }
+      });
+      pre.appendChild(btn);
+    });
+  }
+
+  // Raw language tag from the fence info string, e.g. "C++", "cpp".
+  function codeTagName(code) {
+    const m = code.className.match(/language-([\w#+.-]+)/);
+    return m ? m[1] : '';
+  }
+
   // Syntax-highlight fenced code blocks with an explicit, supported
   // language tag (tagged-only: untagged/plaintext/nohighlight blocks keep
-  // plain styling but still get a copy button). Runs post-sanitize.
+  // plain styling). Runs post-sanitize; skipped entirely without hljs.
   function highlightCodeBlocks() {
     if (!window.hljs || !elements.preview) return;
     elements.preview.querySelectorAll('pre code').forEach(code => {
-      ensureCopyButton(code);
       if (code.classList.contains('nohighlight') || code.classList.contains('plaintext')) return;
-      const m = code.className.match(/language-([\w#+.-]+)/);
-      if (!m || !window.hljs.getLanguage(m[1].toLowerCase())) return;
+      const tag = codeTagName(code);
+      if (!tag || !window.hljs.getLanguage(tag.toLowerCase())) return;
       try {
         window.hljs.highlightElement(code);
       } catch (e) {
         console.error('Code highlighting failed:', e);
       }
     });
-  }
-
-  function ensureCopyButton(code) {
-    const pre = code.parentElement;
-    if (!pre || pre.tagName !== 'PRE' || pre.classList.contains('has-copy-btn')) return;
-    pre.classList.add('has-copy-btn');
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'copy-btn';
-    btn.textContent = 'Copy';
-    btn.setAttribute('aria-label', 'Copy code to clipboard');
-    btn.addEventListener('click', async () => {
-      try {
-        await copyText(code.textContent);
-        btn.textContent = 'Copied!';
-        setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
-      } catch (e) {
-        console.error('Copy failed:', e);
-      }
-    });
-    pre.appendChild(btn);
   }
 
   // Splits markdown source into { text, isCode } segments so math
@@ -743,6 +760,7 @@
     // Markdown is already on screen at this point — MathJax fills in the
     // formulas as soon as each typeset resolves.
     typesetMath(restoreMathPlaceholders());
+    addCopyButtons();
     highlightCodeBlocks();
 
     saveState();
@@ -1027,6 +1045,11 @@
     document.addEventListener('pointerdown', handleOutsideMenu);
     if (elements.hljsScript) {
       elements.hljsScript.addEventListener('load', configureHljs);
+      // A missing/blocked library degrades silently by design (plain code,
+      // working copy buttons) — but a wrong URL is a config bug, so be loud.
+      elements.hljsScript.addEventListener('error', () => {
+        console.error('highlight.js failed to load — code blocks will stay plain.');
+      });
     }
 
     elements.shareModalClose.addEventListener('click', closeShareModal);
