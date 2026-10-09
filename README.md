@@ -227,6 +227,8 @@ File and display settings live behind the **gear button** in header-right: Open 
 
 ### Live Preview Rendering Pipeline
 
+Two tiers: a fast synchronous commit on every keystroke, plus a trailing async enhance pass for the heavy work.
+
 ```
 textarea input event
     ↓
@@ -234,22 +236,38 @@ debouncedRender() — clears previous timer, sets 100ms timeout
     ↓
 requestAnimationFrame(renderPreview()) — batches to next paint
     ↓
-mdParser.parse(content) — converts Markdown to HTML (custom marked.Marked instance)
+TIER 1 — sync commit (every keystroke):
+  Tier-0 fast paths (backtick / math-char scans skip whole passes)
     ↓
-DOMPurify.sanitize(html) — strips dangerous tags/attributes (XSS prevention)
+  extractMath() — pulls LaTeX into placeholders (skipped if no math chars)
     ↓
-preview.innerHTML = sanitized — updates DOM
+  mdParser.parse(source) — converts Markdown to HTML (custom marked.Marked instance)
     ↓
-Post-render: inject target="_blank" on all external <a> links
+  DOMPurify.sanitize(html) — strips dangerous tags/attributes (XSS prevention)
     ↓
-saveState() — persists content to localStorage
+  preview.innerHTML = sanitized, scroll position preserved — updates DOM
+    ↓
+  Post-render: inject target="_blank" on all external <a> links
+    ↓
+  restoreMathPlaceholders() + addCopyButtons() — cheap DOM
+    ↓
+  saveState() — persists content to localStorage
+    ↓
+TIER 2 — async enhance (trailing 250ms after typing pauses):
+  highlight code blocks in chunks (6 per chunk, yields between)
+    ↓
+  MathJax.typesetPromise() on live, untypeset math spans only
 ```
 
 **Empty state**: When content is empty/whitespace-only, renders an SVG icon + "Start typing to see the preview" message instead of calling the parser.
 
-**Debouncing**: 100ms delay prevents excessive parsing on rapid keystrokes. Timer is cleared on each new input event.
+**Debouncing**: 100ms delay prevents excessive parsing on rapid keystrokes. Timer is cleared on each new input event. The enhance pass trails 250ms behind the last commit and re-schedules on every keystroke, so no heavy work runs mid-typing.
 
 **requestAnimationFrame**: Ensures DOM updates happen on the next paint cycle, avoiding layout thrashing.
+
+**Generations (non-interference)**: every sync commit bumps `renderGen`; each async checkpoint aborts when its generation goes stale. Enhance re-queries the live DOM at fire time (never stale node references), in-flight MathJax on detached nodes evaporates harmlessly, and there is exactly one commit timer plus one enhance timer. `localStorage` stays on the sync path so only committed content persists.
+
+**Tier-0 fast paths**: no backtick → code splitting skipped (single passthrough segment); no math delimiters for the active mode → extraction skipped; restore/highlight/enhance no-op on empty results. Plain-prose documents pay zero feature overhead.
 
 ### Theming System
 
@@ -381,9 +399,10 @@ md_viewer/
 2. Textarea value changes
 3. `input` event fires → `debouncedRender()`
 4. After 100ms debounce → `requestAnimationFrame(renderPreview)`
-5. `renderPreview()` reads textarea value, parses Markdown via `mdParser`, sanitizes, updates preview DOM
+5. `renderPreview()` commits synchronously: reads textarea value, extracts math (fast-pathed), parses Markdown via `mdParser`, sanitizes, updates preview DOM (scroll preserved), restores math placeholders, adds copy buttons
 6. Post-render: all external `<a>` links get `target="_blank" rel="noopener noreferrer"` injected
 7. `saveState()` persists content to `localStorage`
+8. 250ms after the last commit → `runEnhance()`: chunked code highlighting, then MathJax typesetting of live spans only (both generation-guarded)
 
 ---
 

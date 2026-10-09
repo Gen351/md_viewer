@@ -49,6 +49,8 @@
   const HLJS_AUTO_DARK = CODE_THEMES.GITHUB_DARK;
 
   const DEBOUNCE_DELAY = 100;
+  const ENHANCE_DELAY = 250;
+  const ENHANCE_CHUNK = 6;
 
   // Max total length (chars) of a generated share link. The file travels in
   // the URL fragment, which is never sent to a server, so only browser-side
@@ -117,10 +119,14 @@
   let scrollSyncSource = null;
   let scrollSyncTarget = null;
 
-  // Math (LaTeX) state: placeholder records for the current render, plus
-  // nodes waiting for MathJax when the library hasn't finished loading yet.
+  // Math (LaTeX) state: placeholder records for the current render.
   let pendingMaths = [];
-  let queuedMathNodes = [];
+
+  // Render generations: every sync commit bumps renderGen; async enhance
+  // stages abort when their generation goes stale, so slow work can never
+  // overwrite (or append to) newer output.
+  let renderGen = 0;
+  let enhanceTimer = null;
 
   function init() {
     cacheElements();
@@ -517,21 +523,18 @@
     return m ? m[1] : '';
   }
 
-  // Syntax-highlight fenced code blocks with an explicit, supported
-  // language tag (tagged-only: untagged/plaintext/nohighlight blocks keep
-  // plain styling). Runs post-sanitize; skipped entirely without hljs.
-  function highlightCodeBlocks() {
-    if (!window.hljs || !elements.preview) return;
-    elements.preview.querySelectorAll('pre code').forEach(code => {
-      if (code.classList.contains('nohighlight') || code.classList.contains('plaintext')) return;
-      const tag = codeTagName(code);
-      if (!tag || !window.hljs.getLanguage(tag.toLowerCase())) return;
-      try {
-        window.hljs.highlightElement(code);
-      } catch (e) {
-        console.error('Code highlighting failed:', e);
-      }
-    });
+  // Highlights one fenced code block with an explicit, supported language
+  // tag (tagged-only). Called from the enhance pass, chunk by chunk.
+  function highlightOneBlock(code) {
+    if (code.classList.contains('nohighlight') || code.classList.contains('plaintext')) return;
+    if (code.dataset.highlighted) return;
+    const tag = codeTagName(code);
+    if (!tag || !window.hljs.getLanguage(tag.toLowerCase())) return;
+    try {
+      window.hljs.highlightElement(code);
+    } catch (e) {
+      console.error('Code highlighting failed:', e);
+    }
   }
 
   // Splits markdown source into { text, isCode } segments so math
@@ -602,8 +605,21 @@
   // records { tex, display } for each. Tokens use private-use Unicode so
   // user-typed text can never collide with them, and they carry no
   // markdown meaning through marked or DOMPurify.
+  function hasMathChars(src, flags) {
+    // Microsecond pre-scan: skip the whole extraction pass when no math
+    // delimiters can possibly match.
+    if (flags.displayDollar && src.includes('$$')) return true;
+    if (flags.latex && (src.includes('\\(') || src.includes('\\['))) return true;
+    if (flags.inlineDollar && /\$(?!\s)/.test(src)) return true;
+    return false;
+  }
+
   function extractMath(src, flags) {
     const maths = [];
+    // Fast path: no code spans possible without backticks — extract inline.
+    if (!src.includes('`')) {
+      return { text: extractMathDelimiters(src, flags, maths), maths };
+    }
     const parts = splitCodeSegments(src).map(seg => {
       if (seg.isCode) return seg.text;
       return extractMathFromText(seg.text, flags, maths);
@@ -697,35 +713,69 @@
     return nodes;
   }
 
-  function typesetMath(nodes) {
-    if (!nodes.length) return;
-    if (window.MathJax && window.MathJax.typesetPromise) {
-      window.MathJax.typesetPromise(nodes).catch(e => {
-        console.error('MathJax typeset failed:', e);
-      });
-    } else {
-      // Library still loading (or blocked): retry once it arrives.
-      // flushQueuedMath keeps only attached, untypeset nodes.
-      queuedMathNodes.push(...nodes);
-    }
+  function yieldToMain() {
+    // Lets the keystroke paint land before heavy work resumes. Idle-callback
+    // waits for a real lull (with a cap); setTimeout is the fallback.
+    return new Promise(resolve => {
+      if (window.requestIdleCallback) {
+        requestIdleCallback(() => resolve(), { timeout: 60 });
+      } else {
+        setTimeout(resolve, 0);
+      }
+    });
   }
 
-  function flushQueuedMath() {
-    if (!window.MathJax || !window.MathJax.typesetPromise) return;
-    if (!queuedMathNodes.length) return;
-    const live = queuedMathNodes.filter(n => n.isConnected && !n.querySelector('mjx-container'));
-    queuedMathNodes = [];
-    if (live.length) typesetMath(live);
+  function scheduleEnhance(gen) {
+    clearTimeout(enhanceTimer);
+    enhanceTimer = setTimeout(() => runEnhance(gen), ENHANCE_DELAY);
+  }
+
+  async function runEnhance(gen) {
+    if (gen !== renderGen) return;
+    await yieldToMain();
+    if (gen !== renderGen || !elements.preview) return;
+
+    // Highlight in chunks so huge docs can't block typing; abort cleanly
+    // when a newer commit lands mid-pass.
+    if (window.hljs) {
+      const blocks = Array.from(elements.preview.querySelectorAll('pre code'));
+      for (let i = 0; i < blocks.length; i += ENHANCE_CHUNK) {
+        if (gen !== renderGen) return;
+        blocks.slice(i, i + ENHANCE_CHUNK).forEach(highlightOneBlock);
+        await yieldToMain();
+      }
+    }
+    if (gen !== renderGen) return;
+
+    // Re-query at fire time: only ever touches the current DOM, and only
+    // spans MathJax hasn't processed yet.
+    if (window.MathJax && window.MathJax.typesetPromise) {
+      const spans = Array.from(elements.preview.querySelectorAll('span.math'))
+        .filter(n => !n.querySelector('mjx-container'));
+      if (spans.length) {
+        try {
+          await window.MathJax.typesetPromise(spans);
+        } catch (e) {
+          console.error('MathJax typeset failed:', e);
+        }
+      }
+    }
+    // MathJax still arriving is covered by onMathJaxReady → scheduleEnhance.
   }
 
   function onMathJaxReady() {
     // The MathJax global exists as soon as our config block runs, but
     // startup.promise only appears once the library itself executes.
+    // Funnels through the normal enhance path so a late arrival typesets
+    // exactly once, on the current DOM.
     if (!window.MathJax || !window.MathJax.startup || !window.MathJax.startup.promise) return;
-    window.MathJax.startup.promise.then(flushQueuedMath);
+    window.MathJax.startup.promise.then(() => scheduleEnhance(renderGen));
   }
 
   function renderPreview() {
+    // Every commit bumps the generation: async enhance stages check it and
+    // abort when stale, so slow work never touches newer output.
+    const gen = ++renderGen;
     const content = elements.editor.value.trim();
     state.content = elements.editor.value;
 
@@ -755,14 +805,25 @@
     pendingMaths = [];
     let source = content;
     if (state.mathMode !== MATH_MODES.OFF) {
-      const extracted = extractMath(content, mathDelimitersActive());
-      source = extracted.text;
-      pendingMaths = extracted.maths;
+      const flags = mathDelimitersActive();
+      // Tier-0 fast path: skip extraction entirely when no math chars exist.
+      if (hasMathChars(content, flags)) {
+        const extracted = extractMath(content, flags);
+        source = extracted.text;
+        pendingMaths = extracted.maths;
+      }
     }
 
     const html = mdParser.parse(source);
     const sanitized = DOMPurify.sanitize(html);
+
+    // Preserve preview scroll across the full-DOM rebuild (the programmatic
+    // set is absorbed by scroll sync's epsilon guard — no feedback loop).
+    const paneTop = elements.previewPane.scrollTop;
+    const paneLeft = elements.previewPane.scrollLeft;
     elements.preview.innerHTML = sanitized;
+    elements.previewPane.scrollTop = paneTop;
+    elements.previewPane.scrollLeft = paneLeft;
 
     const links = elements.preview.querySelectorAll('a[href]');
     links.forEach(link => {
@@ -773,14 +834,18 @@
       }
     });
 
-    // Swap placeholders back for math nodes and typeset them async.
-    // Markdown is already on screen at this point — MathJax fills in the
-    // formulas as soon as each typeset resolves.
-    typesetMath(restoreMathPlaceholders());
+    // Sync commit ends here: placeholders show raw TeX until enhance runs,
+    // copy buttons are cheap DOM. Heavy work trails in scheduleEnhance().
+    restoreMathPlaceholders();
     addCopyButtons();
-    highlightCodeBlocks();
-
     saveState();
+
+    // Only schedule heavy work when there is something to enhance
+    // (an escaped "&lt;pre" in text may false-positive the string check —
+    // harmless, the pass then simply finds nothing).
+    if (pendingMaths.length || sanitized.includes('<pre')) {
+      scheduleEnhance(gen);
+    }
   }
 
   function debouncedRender() {
@@ -1061,7 +1126,11 @@
     elements.settingsMenu.addEventListener('keydown', handleMenuKeys);
     document.addEventListener('pointerdown', handleOutsideMenu);
     if (elements.hljsScript) {
-      elements.hljsScript.addEventListener('load', configureHljs);
+      elements.hljsScript.addEventListener('load', () => {
+        configureHljs();
+        // Late arrival: enhance whatever is on screen now.
+        scheduleEnhance(renderGen);
+      });
       // A missing/blocked library degrades silently by design (plain code,
       // working copy buttons) — but a wrong URL is a config bug, so be loud.
       elements.hljsScript.addEventListener('error', () => {
