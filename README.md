@@ -34,6 +34,7 @@ All app state lives in a single `state` object:
 | `filename` | `string` | Name of the opened/saved file |
 | `fileHandle` | `FileSystemFileHandle \| null` | Handle for direct file writes (File System Access API) |
 | `mathMode` | `string` | `'off'`, `'inline'`, `'display'`, `'dollars'`, `'latex'`, or `'all'` |
+| `codeTheme` | `string` | `'auto'`, `'github'`, `'github-dark'`, `'monokai'`, `'dracula'`, or `'nord'` |
 
 ### localStorage Keys
 
@@ -44,6 +45,7 @@ All app state lives in a single `state` object:
 | `md-editor-content` | Editor content (auto-saved on every render) |
 | `md-editor-filename` | Last opened filename |
 | `md-editor-math-mode` | Selected math rendering mode |
+| `md-editor-code-theme` | Selected code highlighting theme |
 
 ### DOM Element IDs
 
@@ -71,8 +73,15 @@ All app state lives in a single `state` object:
 | `shareModalTitle` | `<h2>` | Modal title |
 | `shareModalMessage` | `<p>` | Modal message |
 | `shareModalClose` | `<button>` | Modal close button |
-| `mathMode` | `<select>` | LaTeX math mode dropdown (`.math-select`) |
 | `mathjaxScript` | `<script>` | MathJax library tag (load detection) |
+| `menuBtn` | `<button>` | Settings menu (gear) trigger |
+| `settingsMenu` | `<div>` | Settings menu panel (`.menu`) |
+| `mathMenuBtn` | `<button>` | Math flyout parent row |
+| `mathFlyout` | `<div>` | Math mode options (`.flyout`) |
+| `codeMenuBtn` | `<button>` | Code Themes flyout parent row |
+| `codeFlyout` | `<div>` | Code theme options (`.flyout`) |
+| `hljsTheme` | `<link>` | Active highlight.js theme stylesheet (swapped on demand) |
+| `hljsScript` | `<script>` | highlight.js library tag (load detection) |
 | `fileInput` | `<input type="file">` | Hidden file input (fallback for open) |
 | `filenameDisplay` | `<span>` | Shows current filename badge |
 
@@ -133,7 +142,7 @@ All shortcuts detect the platform (User-Agent Client Hints, falling back to `nav
 | `Ctrl+Shift+Z` | `document.execCommand('redo')` | Alternate redo shortcut |
 | `Ctrl+D` | `toggleTheme()` | Switches between light/dark |
 | `Ctrl+M` | `cycleMathMode()` | Cycles math mode: Off → $ → $$ → $+$$ → LaTeX → All |
-| `Escape` | Closes the share modal if open, otherwise `setViewMode('split')` | Closes modal or resets to split view |
+| `Escape` | Closes share modal if open, else settings menu, else `setViewMode('split')` | Closes modal/menu or resets to split view |
 | `Tab` | Inserts 2 spaces | Overrides native tab focus behavior |
 
 Shortcut handlers call `e.preventDefault()` to suppress default browser behavior.
@@ -183,7 +192,7 @@ Scrolling either pane proportionally scrolls the other (`syncScroll`):
 
 ### Math (LaTeX) Rendering
 
-Optional LaTeX math via **MathJax v3** (`tex-chtml`, pinned), enabled with the **Math dropdown** in the header (default **Off**, so `$` stays literal text unless you opt in):
+Optional LaTeX math via **MathJax v3** (`tex-chtml`, pinned), enabled via the **Math submenu** in the settings menu (gear icon, header-right; default **Off**, so `$` stays literal text unless you opt in):
 
 | Mode | Active delimiters |
 |------|-------------------|
@@ -202,6 +211,19 @@ Optional LaTeX math via **MathJax v3** (`tex-chtml`, pinned), enabled with the *
 - After sanitize + `innerHTML`, `restoreMathPlaceholders()` swaps tokens for `<span>` nodes built with `textContent` (never `innerHTML`), then `MathJax.typesetPromise()` typesets **only those nodes**, asynchronously. Markdown is already on screen; formulas fill in as each typeset resolves, and stale typesets from older keystrokes mutate detached nodes and evaporate harmlessly.
 - Delimiter rules: no space adjacent to `$`, closing `$` not followed by a digit (so `$5 and $10` is left alone), `\$` never opens/closes, inline `$` is single-line only, and `$$x$$` stays literal unless a `$$` mode is active.
 - MathJax runs with `startup.typeset: false` so it never scans the whole page; bad TeX renders inline-red instead of crashing the preview; if the CDN is unreachable (offline), raw `$…$` text simply stays visible.
+
+### Code Highlighting
+
+Fenced code blocks with an explicit language tag are syntax-highlighted via **highlight.js v11** (common bundle, pinned), e.g. ```` ```cpp ```` or ```` ```python ````. Untagged blocks and `plaintext` / `nohighlight` blocks keep plain styling.
+
+- The tag after the fence picks the language; a custom matcher also accepts `+`, `#`, `.` and `-`, so ```` ```C++ ```` and ```` ```C# ```` resolve through the official alias table (`c++`→cpp, `c#`→csharp). Canonical lowercase tags are still recommended.
+- Highlighting runs post-sanitize on `pre code` nodes only (tagged + supported), so it never touches math spans or inline code and the XSS posture is unchanged. Our own code-block chrome is kept — only token colors come from the highlight.js theme.
+- Every fenced block gets a **Copy** button (top-right; hover/focus reveal on desktop, always visible on touch) that copies the raw code with clipboard + `execCommand` fallback and flashes "Copied!".
+- **Code Themes** submenu (gear menu): `Auto (app theme)` default plus GitHub Light/Dark, Monokai, Dracula, Nord. A single on-demand stylesheet is swapped (`Auto` follows the app theme in `applyTheme()`); the choice persists in `localStorage` (`md-editor-code-theme`).
+
+### Settings Menu
+
+File and display settings live behind the **gear button** in header-right: Open / Save / Share rows, a **Math ▸** flyout (the six math modes), a **Code Themes ▸** flyout, and the icon-only theme button. Both flyouts open leftward so they never clip off the viewport edge (on ≤480px screens they expand inline instead). The menu closes on outside click, on `Escape` (before the split-view reset), and on row activation; arrow keys navigate rows; focus returns to the gear on dismiss.
 
 ### Live Preview Rendering Pipeline
 
@@ -289,6 +311,7 @@ Uses `document.execCommand('undo')` and `document.execCommand('redo')` on the te
 - **Vanilla JavaScript (ES6+)** — IIFE pattern, strict mode, arrow functions, async/await, template literals, destructuring
 - **marked.js** (latest release, jsDelivr CDN, unpinned) — Markdown-to-HTML parser via `new marked.Marked()` with custom renderer for heading anchors and link handling
 - **MathJax** (pinned v3.2.2, jsDelivr CDN, deferred) — LaTeX math typesetting via targeted async `MathJax.typesetPromise()` on extracted math nodes only
+- **highlight.js** (pinned v11.9.0 common bundle, jsDelivr CDN, deferred) — code syntax highlighting via `hljs.highlightElement()` on tagged fenced blocks; theme via a single swappable stylesheet
 - **DOMPurify** (CDN v3.0.6) — HTML sanitization via `DOMPurify.sanitize()`
 
 ## Getting Started
@@ -349,6 +372,7 @@ md_viewer/
 - `elements.editor.addEventListener('input', ...)` for live preview triggering
 - `elements.editor.addEventListener('keydown', handleTabKey)` for Tab interception
 - `elements.preview.addEventListener('click', handlePreviewClick)` for TOC smooth-scroll navigation
+- Settings menu: `menuBtn` toggles the panel, flyout parents toggle side panels, option buttons apply + close; document `pointerdown` closes on outside clicks; `settingsMenu` handles arrow-key navigation
 - Toolbar buttons and view buttons use individual `addEventListener('click', ...)`
 - File input uses `change` event
 

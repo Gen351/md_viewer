@@ -6,7 +6,8 @@
     VIEW_MODE: 'md-editor-view-mode',
     CONTENT: 'md-editor-content',
     FILENAME: 'md-editor-filename',
-    MATH_MODE: 'md-editor-math-mode'
+    MATH_MODE: 'md-editor-math-mode',
+    CODE_THEME: 'md-editor-code-theme'
   };
 
   const VIEW_MODES = {
@@ -24,6 +25,19 @@
     ALL: 'all'
   };
 
+  const CODE_THEMES = {
+    AUTO: 'auto',
+    GITHUB: 'github',
+    GITHUB_DARK: 'github-dark',
+    MONOKAI: 'monokai',
+    DRACULA: 'dracula',
+    NORD: 'nord'
+  };
+
+  const HLJS_CDN_BASE = 'https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/';
+  const HLJS_AUTO_LIGHT = CODE_THEMES.GITHUB;
+  const HLJS_AUTO_DARK = CODE_THEMES.GITHUB_DARK;
+
   const DEBOUNCE_DELAY = 100;
 
   // Max total length (chars) of a generated share link. The file travels in
@@ -39,7 +53,8 @@
     content: '',
     filename: '',
     fileHandle: null,
-    mathMode: MATH_MODES.OFF
+    mathMode: MATH_MODES.OFF,
+    codeTheme: CODE_THEMES.AUTO
   };
 
   const elements = {
@@ -67,8 +82,15 @@
     shareModalTitle: null,
     shareModalMessage: null,
     shareModalClose: null,
-    mathMode: null,
-    mathjaxScript: null
+    mathjaxScript: null,
+    menuBtn: null,
+    settingsMenu: null,
+    mathMenuBtn: null,
+    mathFlyout: null,
+    codeMenuBtn: null,
+    codeFlyout: null,
+    hljsTheme: null,
+    hljsScript: null
   };
 
   let debounceTimer = null;
@@ -96,7 +118,9 @@
     applyTheme();
     applyViewMode();
     applyMathMode();
+    applyCodeTheme();
     configureMarked();
+    configureHljs();
     bindEvents();
     renderPreview();
     updateFilenameDisplay();
@@ -160,8 +184,15 @@
     elements.shareModalTitle = document.getElementById('shareModalTitle');
     elements.shareModalMessage = document.getElementById('shareModalMessage');
     elements.shareModalClose = document.getElementById('shareModalClose');
-    elements.mathMode = document.getElementById('mathMode');
     elements.mathjaxScript = document.getElementById('mathjaxScript');
+    elements.menuBtn = document.getElementById('menuBtn');
+    elements.settingsMenu = document.getElementById('settingsMenu');
+    elements.mathMenuBtn = document.getElementById('mathMenuBtn');
+    elements.mathFlyout = document.getElementById('mathFlyout');
+    elements.codeMenuBtn = document.getElementById('codeMenuBtn');
+    elements.codeFlyout = document.getElementById('codeFlyout');
+    elements.hljsTheme = document.getElementById('hljsTheme');
+    elements.hljsScript = document.getElementById('hljsScript');
   }
 
   function loadState() {
@@ -170,6 +201,10 @@
     state.mathMode = localStorage.getItem(STORAGE_KEYS.MATH_MODE) || MATH_MODES.OFF;
     if (!Object.values(MATH_MODES).includes(state.mathMode)) {
       state.mathMode = MATH_MODES.OFF;
+    }
+    state.codeTheme = localStorage.getItem(STORAGE_KEYS.CODE_THEME) || CODE_THEMES.AUTO;
+    if (!Object.values(CODE_THEMES).includes(state.codeTheme)) {
+      state.codeTheme = CODE_THEMES.AUTO;
     }
 
     // Check if content was passed via URL hash (cross-origin import)
@@ -223,6 +258,7 @@
   function applyTheme() {
     document.documentElement.setAttribute('data-theme', state.theme);
     localStorage.setItem(STORAGE_KEYS.THEME, state.theme);
+    applyHljsTheme();
   }
 
   function toggleTheme() {
@@ -309,8 +345,53 @@
   }
 
   function applyMathMode() {
-    if (elements.mathMode) elements.mathMode.value = state.mathMode;
+    syncFlyoutSelection(elements.mathFlyout, state.mathMode);
     localStorage.setItem(STORAGE_KEYS.MATH_MODE, state.mathMode);
+  }
+
+  // Marks the active option in a flyout (checkmark + aria-checked).
+  function syncFlyoutSelection(flyout, value) {
+    if (!flyout) return;
+    flyout.querySelectorAll('[data-value]').forEach(opt => {
+      const selected = opt.getAttribute('data-value') === value;
+      opt.classList.toggle('selected', selected);
+      opt.setAttribute('aria-checked', selected ? 'true' : 'false');
+    });
+  }
+
+  function applyCodeTheme() {
+    syncFlyoutSelection(elements.codeFlyout, state.codeTheme);
+    localStorage.setItem(STORAGE_KEYS.CODE_THEME, state.codeTheme);
+    applyHljsTheme();
+  }
+
+  function setCodeTheme(id) {
+    if (!Object.values(CODE_THEMES).includes(id)) return;
+    state.codeTheme = id;
+    applyCodeTheme();
+  }
+
+  function currentHljsThemeId() {
+    if (state.codeTheme === CODE_THEMES.AUTO) {
+      return state.theme === 'dark' ? HLJS_AUTO_DARK : HLJS_AUTO_LIGHT;
+    }
+    return state.codeTheme;
+  }
+
+  // Single on-demand stylesheet: only the active theme CSS is fetched.
+  function applyHljsTheme() {
+    if (!elements.hljsTheme) return;
+    const href = HLJS_CDN_BASE + currentHljsThemeId() + '.min.css';
+    if (elements.hljsTheme.getAttribute('href') !== href) {
+      elements.hljsTheme.setAttribute('href', href);
+    }
+  }
+
+  function configureHljs() {
+    if (!window.hljs || !window.hljs.configure) return;
+    // The default matcher only accepts word chars, so `language-C++` would
+    // resolve to just `C`. Allow +, #, . and - so C++/C# tags work.
+    window.hljs.configure({ languageDetectRe: /language-([\w#+.-]+)/ });
   }
 
   function setMathMode(mode) {
@@ -325,8 +406,105 @@
     setMathMode(next);
   }
 
-  function handleMathModeChange(e) {
-    setMathMode(e.target.value);
+  function isMenuOpen() {
+    return !!elements.settingsMenu && !elements.settingsMenu.classList.contains('hidden');
+  }
+
+  function openMenu() {
+    elements.settingsMenu.classList.remove('hidden');
+    elements.menuBtn.setAttribute('aria-expanded', 'true');
+  }
+
+  function closeMenu(refocus) {
+    if (!isMenuOpen()) return;
+    closeFlyouts();
+    elements.settingsMenu.classList.add('hidden');
+    elements.menuBtn.setAttribute('aria-expanded', 'false');
+    if (refocus && elements.menuBtn) elements.menuBtn.focus();
+  }
+
+  function toggleMenu() {
+    if (isMenuOpen()) {
+      closeMenu();
+    } else {
+      openMenu();
+    }
+  }
+
+  function toggleFlyout(btn, flyout) {
+    const willOpen = flyout.classList.contains('hidden');
+    closeFlyouts();
+    if (willOpen) {
+      flyout.classList.remove('hidden');
+      btn.setAttribute('aria-expanded', 'true');
+    }
+  }
+
+  function closeFlyouts() {
+    [elements.mathFlyout, elements.codeFlyout].forEach(f => {
+      if (f) f.classList.add('hidden');
+    });
+    [elements.mathMenuBtn, elements.codeMenuBtn].forEach(b => {
+      if (b) b.setAttribute('aria-expanded', 'false');
+    });
+  }
+
+  function handleOutsideMenu(e) {
+    if (!isMenuOpen()) return;
+    if (e.target.closest && e.target.closest('.menu-wrapper')) return;
+    closeMenu();
+  }
+
+  function handleMenuKeys(e) {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
+    const items = Array.from(elements.settingsMenu.querySelectorAll('button'))
+      .filter(b => b.offsetParent !== null);
+    if (!items.length) return;
+    e.preventDefault();
+    const i = items.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown') items[(i + 1 + items.length) % items.length].focus();
+    else if (e.key === 'ArrowUp') items[(i - 1 + items.length) % items.length].focus();
+    else if (e.key === 'Home') items[0].focus();
+    else items[items.length - 1].focus();
+  }
+
+  // Syntax-highlight fenced code blocks with an explicit, supported
+  // language tag (tagged-only: untagged/plaintext/nohighlight blocks keep
+  // plain styling but still get a copy button). Runs post-sanitize.
+  function highlightCodeBlocks() {
+    if (!window.hljs || !elements.preview) return;
+    elements.preview.querySelectorAll('pre code').forEach(code => {
+      ensureCopyButton(code);
+      if (code.classList.contains('nohighlight') || code.classList.contains('plaintext')) return;
+      const m = code.className.match(/language-([\w#+.-]+)/);
+      if (!m || !window.hljs.getLanguage(m[1].toLowerCase())) return;
+      try {
+        window.hljs.highlightElement(code);
+      } catch (e) {
+        console.error('Code highlighting failed:', e);
+      }
+    });
+  }
+
+  function ensureCopyButton(code) {
+    const pre = code.parentElement;
+    if (!pre || pre.tagName !== 'PRE' || pre.classList.contains('has-copy-btn')) return;
+    pre.classList.add('has-copy-btn');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'copy-btn';
+    btn.textContent = 'Copy';
+    btn.setAttribute('aria-label', 'Copy code to clipboard');
+    btn.addEventListener('click', async () => {
+      try {
+        await copyText(code.textContent);
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+      } catch (e) {
+        console.error('Copy failed:', e);
+      }
+    });
+    pre.appendChild(btn);
   }
 
   // Splits markdown source into { text, isCode } segments so math
@@ -565,6 +743,7 @@
     // Markdown is already on screen at this point — MathJax fills in the
     // formulas as soon as each typeset resolves.
     typesetMath(restoreMathPlaceholders());
+    highlightCodeBlocks();
 
     saveState();
   }
@@ -603,6 +782,7 @@
   }
 
   async function openFileWithPicker() {
+    closeMenu();
     if (!window.showOpenFilePicker) {
       openFile();
       return;
@@ -626,6 +806,7 @@
   }
 
   async function saveFile() {
+    closeMenu();
     const content = elements.editor.value;
     if (!content.trim()) return;
 
@@ -710,6 +891,7 @@
   }
 
   async function shareFile() {
+    closeMenu();
     const content = elements.editor.value;
     if (!content.trim()) {
       openShareModal('Nothing to share', 'The editor is empty. Write something first, then share it.');
@@ -824,8 +1006,28 @@
     elements.btnOpen.addEventListener('click', openFileWithPicker);
     elements.btnSave.addEventListener('click', saveFile);
     elements.btnShare.addEventListener('click', shareFile);
-    elements.mathMode.addEventListener('change', handleMathModeChange);
     elements.fileInput.addEventListener('change', handleFileSelect);
+
+    elements.menuBtn.addEventListener('click', toggleMenu);
+    elements.mathMenuBtn.addEventListener('click', () => toggleFlyout(elements.mathMenuBtn, elements.mathFlyout));
+    elements.codeMenuBtn.addEventListener('click', () => toggleFlyout(elements.codeMenuBtn, elements.codeFlyout));
+    elements.mathFlyout.querySelectorAll('[data-value]').forEach(opt => {
+      opt.addEventListener('click', () => {
+        setMathMode(opt.getAttribute('data-value'));
+        closeMenu(true);
+      });
+    });
+    elements.codeFlyout.querySelectorAll('[data-value]').forEach(opt => {
+      opt.addEventListener('click', () => {
+        setCodeTheme(opt.getAttribute('data-value'));
+        closeMenu(true);
+      });
+    });
+    elements.settingsMenu.addEventListener('keydown', handleMenuKeys);
+    document.addEventListener('pointerdown', handleOutsideMenu);
+    if (elements.hljsScript) {
+      elements.hljsScript.addEventListener('load', configureHljs);
+    }
 
     elements.shareModalClose.addEventListener('click', closeShareModal);
     elements.shareModal.addEventListener('click', (e) => {
@@ -963,6 +1165,11 @@
       if (isShareModalOpen()) {
         e.preventDefault();
         closeShareModal();
+        return;
+      }
+      if (isMenuOpen()) {
+        e.preventDefault();
+        closeMenu(true);
         return;
       }
       setViewMode(VIEW_MODES.SPLIT);
