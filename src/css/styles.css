@@ -464,12 +464,18 @@ html, body {
   line-height: 1.6;
 }
 
-/* Keep our own code-block chrome and take only the token colors from the
-   highlight.js theme (its pre/code background would otherwise double up
-   padding and clash with the app theme). */
-.preview pre code.hljs {
+/* Highlighted blocks take the theme's full styling (background included)
+   so every theme stays readable in either app mode — a light theme keeps
+   its light block in dark mode and vice versa. Only our outer chrome steps
+   aside; the radius stays ours. Unthemed blocks keep the app styling above. */
+.preview pre:has(> code.hljs) {
   background: transparent;
+  border-color: transparent;
   padding: 0;
+}
+
+.preview pre code.hljs {
+  border-radius: var(--radius-md);
 }
 
 .preview pre.has-copy-btn {

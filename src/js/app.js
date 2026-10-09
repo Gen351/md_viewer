@@ -34,7 +34,17 @@
     NORD: 'nord'
   };
 
-  const HLJS_CDN_BASE = 'https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.9.0/styles/';
+  const HLJS_STYLE_BASE = 'https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.9.0/styles/';
+  // Dracula is a third-party theme (not bundled with highlight.js core),
+  // served from its official repo. Everything else comes from the pinned
+  // @highlightjs/cdn-assets package.
+  const CODE_THEME_URLS = {
+    'github': HLJS_STYLE_BASE + 'github.min.css',
+    'github-dark': HLJS_STYLE_BASE + 'github-dark.min.css',
+    'monokai': HLJS_STYLE_BASE + 'monokai.min.css',
+    'nord': HLJS_STYLE_BASE + 'nord.min.css',
+    'dracula': 'https://cdn.jsdelivr.net/gh/dracula/highlightjs@master/dracula.css'
+  };
   const HLJS_AUTO_LIGHT = CODE_THEMES.GITHUB;
   const HLJS_AUTO_DARK = CODE_THEMES.GITHUB_DARK;
 
@@ -371,17 +381,17 @@
     applyCodeTheme();
   }
 
-  function currentHljsThemeId() {
-    if (state.codeTheme === CODE_THEMES.AUTO) {
-      return state.theme === 'dark' ? HLJS_AUTO_DARK : HLJS_AUTO_LIGHT;
-    }
-    return state.codeTheme;
+  function currentHljsThemeUrl() {
+    const id = state.codeTheme === CODE_THEMES.AUTO
+      ? (state.theme === 'dark' ? HLJS_AUTO_DARK : HLJS_AUTO_LIGHT)
+      : state.codeTheme;
+    return CODE_THEME_URLS[id] || CODE_THEME_URLS[HLJS_AUTO_LIGHT];
   }
 
   // Single on-demand stylesheet: only the active theme CSS is fetched.
   function applyHljsTheme() {
     if (!elements.hljsTheme) return;
-    const href = HLJS_CDN_BASE + currentHljsThemeId() + '.min.css';
+    const href = currentHljsThemeUrl();
     if (elements.hljsTheme.getAttribute('href') !== href) {
       elements.hljsTheme.setAttribute('href', href);
     }
@@ -559,15 +569,9 @@
     }
     push(lines.length, !!fence);
 
-    const out = [];
-    for (const seg of segments) {
-      if (seg.isCode) {
-        out.push(seg);
-      } else {
-        splitInlineCode(seg.text, out);
-      }
-    }
-    return out;
+    // Line-level only: callers rejoin with '\n'. (Inline code spans are
+    // split one level down, per line, and rejoined with ''.)
+    return segments;
   }
 
   // Splits plain text on CommonMark code spans: a run of N backticks is
@@ -604,10 +608,23 @@
       if (seg.isCode) return seg.text;
       return extractMathFromText(seg.text, flags, maths);
     });
-    return { text: parts.join(''), maths };
+    // Segments tile whole source lines, so '\n' restores each boundary
+    // separator exactly (join('') would fuse lines and corrupt fences).
+    return { text: parts.join('\n'), maths };
   }
 
+  // Splits one line on inline code spans, extracts math from the non-code
+  // pieces, and rejoins losslessly with ''.
   function extractMathFromText(text, flags, maths) {
+    const pieces = [];
+    splitInlineCode(text, pieces);
+    return pieces.map(piece => {
+      if (piece.isCode) return piece.text;
+      return extractMathDelimiters(piece.text, flags, maths);
+    }).join('');
+  }
+
+  function extractMathDelimiters(text, flags, maths) {
     function stash(tex, display) {
       const id = maths.length;
       maths.push({ tex, display });
