@@ -52,6 +52,9 @@
   const DEBOUNCE_DELAY = 100;
   const ENHANCE_DELAY = 250;
   const ENHANCE_CHUNK = 6;
+  const SAVE_DELAY = 1500;
+  const MATH_CACHE_CAP = 200;
+  const CODE_CACHE_CAP = 200;
 
   const ZOOM_DEFAULT = 1;
   const ZOOM_STEP = 0.1;
@@ -131,6 +134,17 @@
 
   // Math (LaTeX) state: placeholder records for the current render.
   let pendingMaths = [];
+
+  // Render-output caches: MathJax and highlight.js are pure functions of
+  // their input, so rendered HTML is cached by content and reused across
+  // commits — typing in prose never re-typesets or re-highlights unchanged
+  // regions. LRU-evicted, bounded (see *_CACHE_CAP).
+  let mathCache = new Map();
+  let codeCache = new Map();
+
+  // Throttled persistence: renderPreview schedules a save instead of
+  // writing localStorage on every keystroke-commit.
+  let saveTimer = null;
 
   // Render generations: every sync commit bumps renderGen; async enhance
   // stages abort when their generation goes stale, so slow work can never
@@ -287,6 +301,24 @@
     if (state.filename) {
       localStorage.setItem(STORAGE_KEYS.FILENAME, state.filename);
     }
+  }
+
+  // Throttled persistence: commits schedule a save instead of writing the
+  // whole document to localStorage on every keystroke. Explicit flows
+  // (file open) still call saveState() directly.
+  function scheduleSave() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      saveTimer = null;
+      saveState();
+    }, SAVE_DELAY);
+  }
+
+  function flushSave() {
+    if (!saveTimer) return;
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    saveState();
   }
 
   function applyTheme() {
@@ -563,18 +595,60 @@
     return m ? m[1] : '';
   }
 
-  // Highlights one fenced code block with an explicit, supported language
-  // tag (tagged-only). Called from the enhance pass, chunk by chunk.
-  function highlightOneBlock(code) {
+  // Content-addressed cache keys. The single-char prefix keeps (flag, tex)
+  // pairs collision-free; language tags can't contain newlines.
+  function mathCacheKey(tex, display) {
+    return (display ? 'D' : 'I') + '\n' + tex;
+  }
+
+  function codeCacheKey(lang, text) {
+    return lang.toLowerCase() + '\n' + text;
+  }
+
+  function cacheGet(map, key) {
+    if (!map.has(key)) return undefined;
+    const value = map.get(key);
+    map.delete(key);
+    map.set(key, value);
+    return value;
+  }
+
+  function cacheSet(map, key, value, cap) {
+    if (map.has(key)) map.delete(key);
+    map.set(key, value);
+    while (map.size > cap) {
+      map.delete(map.keys().next().value);
+    }
+  }
+
+  // Highlights one fenced code block, reusing cached output when the exact
+  // (language, text) was rendered before. Called from the enhance pass,
+  // chunk by chunk. Untagged/plaintext/nohighlight blocks keep plain
+  // styling (handled by the caller guards).
+  function highlightBlockCached(code) {
     if (code.classList.contains('nohighlight') || code.classList.contains('plaintext')) return;
     if (code.dataset.highlighted) return;
     const tag = codeTagName(code);
-    if (!tag || !window.hljs.getLanguage(tag.toLowerCase())) return;
-    try {
-      window.hljs.highlightElement(code);
-    } catch (e) {
-      console.error('Code highlighting failed:', e);
+    if (!tag) return;
+    const lang = tag.toLowerCase();
+    if (!window.hljs || !window.hljs.getLanguage(lang)) return;
+    const key = codeCacheKey(lang, code.textContent);
+    const cached = cacheGet(codeCache, key);
+    if (cached !== undefined) {
+      code.innerHTML = cached;
+    } else {
+      let value;
+      try {
+        value = window.hljs.highlight(code.textContent, { language: lang, ignoreIllegals: true }).value;
+      } catch (e) {
+        console.error('Code highlighting failed:', e);
+        return;
+      }
+      code.innerHTML = value;
+      cacheSet(codeCache, key, value, CODE_CACHE_CAP);
     }
+    code.classList.add('hljs');
+    code.dataset.highlighted = 'yes';
   }
 
   // Splits markdown source into { text, isCode } segments so math
@@ -737,7 +811,16 @@
         if (math) {
           const span = document.createElement('span');
           span.className = math.display ? 'math math-display' : 'math math-inline';
-          span.textContent = math.display ? '\\[' + math.tex + '\\]' : '\\(' + math.tex + '\\)';
+          const key = mathCacheKey(math.tex, math.display);
+          span.dataset.mathKey = key;
+          // Cache hit: inject the finished formula synchronously — no
+          // MathJax call, no raw-TeX flash for unchanged regions.
+          const cached = cacheGet(mathCache, key);
+          if (cached !== undefined) {
+            span.innerHTML = cached;
+          } else {
+            span.textContent = math.display ? '\\[' + math.tex + '\\]' : '\\(' + math.tex + '\\)';
+          }
           frag.appendChild(span);
           nodes.push(span);
         } else {
@@ -776,25 +859,31 @@
     if (gen !== renderGen || !elements.preview) return;
 
     // Highlight in chunks so huge docs can't block typing; abort cleanly
-    // when a newer commit lands mid-pass.
+    // when a newer commit lands mid-pass. Cached blocks skip the library.
     if (window.hljs) {
       const blocks = Array.from(elements.preview.querySelectorAll('pre code'));
       for (let i = 0; i < blocks.length; i += ENHANCE_CHUNK) {
         if (gen !== renderGen) return;
-        blocks.slice(i, i + ENHANCE_CHUNK).forEach(highlightOneBlock);
+        blocks.slice(i, i + ENHANCE_CHUNK).forEach(highlightBlockCached);
         await yieldToMain();
       }
     }
     if (gen !== renderGen) return;
 
-    // Re-query at fire time: only ever touches the current DOM, and only
-    // spans MathJax hasn't processed yet.
+    // Re-query at fire time: only ever touches the current DOM. Cache-filled
+    // spans already carry an mjx-container, so only new/edited formulas are
+    // typeset — then their output fills the cache.
     if (window.MathJax && window.MathJax.typesetPromise) {
       const spans = Array.from(elements.preview.querySelectorAll('span.math'))
         .filter(n => !n.querySelector('mjx-container'));
       if (spans.length) {
         try {
           await window.MathJax.typesetPromise(spans);
+          spans.forEach(n => {
+            if (n.querySelector('mjx-container') && n.dataset.mathKey) {
+              cacheSet(mathCache, n.dataset.mathKey, n.innerHTML, MATH_CACHE_CAP);
+            }
+          });
         } catch (e) {
           console.error('MathJax typeset failed:', e);
         }
@@ -878,7 +967,7 @@
     // copy buttons are cheap DOM. Heavy work trails in scheduleEnhance().
     restoreMathPlaceholders();
     addCopyButtons();
-    saveState();
+    scheduleSave();
 
     // Only schedule heavy work when there is something to enhance
     // (an escaped "&lt;pre" in text may false-positive the string check —
@@ -1205,6 +1294,13 @@
 
     elements.editor.addEventListener('scroll', () => syncScroll(elements.editor, elements.previewPane));
     elements.previewPane.addEventListener('scroll', () => syncScroll(elements.previewPane, elements.editor));
+
+    // Never lose a trailing throttled save when the tab goes away. The
+    // flush is idempotent, so registering both is safe.
+    window.addEventListener('pagehide', flushSave);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') flushSave();
+    });
   }
 
   function getScrollFraction(el) {

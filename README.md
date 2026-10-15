@@ -259,13 +259,16 @@ TIER 1 — sync commit (every keystroke):
   Post-render: inject target="_blank" on all external <a> links
     ↓
   restoreMathPlaceholders() + addCopyButtons() — cheap DOM
+  (cache hits inject finished formulas synchronously)
     ↓
-  saveState() — persists content to localStorage
+  scheduleSave() — throttled localStorage persistence (1.5s trailing)
     ↓
 TIER 2 — async enhance (trailing 250ms after typing pauses):
-  highlight code blocks in chunks (6 per chunk, yields between)
+  highlight code blocks in chunks (6 per chunk, yields between;
+  cached blocks skip the library)
     ↓
-  MathJax.typesetPromise() on live, untypeset math spans only
+  MathJax.typesetPromise() on new/edited math spans only,
+  then their output fills the cache
 ```
 
 **Empty state**: When content is empty/whitespace-only, renders an SVG icon + "Start typing to see the preview" message instead of calling the parser.
@@ -274,7 +277,9 @@ TIER 2 — async enhance (trailing 250ms after typing pauses):
 
 **requestAnimationFrame**: Ensures DOM updates happen on the next paint cycle, avoiding layout thrashing.
 
-**Generations (non-interference)**: every sync commit bumps `renderGen`; each async checkpoint aborts when its generation goes stale. Enhance re-queries the live DOM at fire time (never stale node references), in-flight MathJax on detached nodes evaporates harmlessly, and there is exactly one commit timer plus one enhance timer. `localStorage` stays on the sync path so only committed content persists.
+**Generations (non-interference)**: every sync commit bumps `renderGen`; each async checkpoint aborts when its generation goes stale. Enhance re-queries the live DOM at fire time (never stale node references), in-flight MathJax on detached nodes evaporates harmlessly, and there is exactly one commit timer plus one enhance timer. Persistence is throttled separately (`scheduleSave`, 1.5s trailing, flushed on `pagehide`/tab-hide), so only committed content persists without a disk write per keystroke.
+
+**Render-output caches**: MathJax and highlight.js are pure functions of their input, so rendered HTML is cached by content (`tex + display flag`, `language + code text`; LRU, 200 entries each) and reused across commits — typing in prose never re-typesets or re-highlights unchanged regions. Cached output was verified ID-free and deterministic, so duplication is safe; error outputs cache too (deterministic per input, re-rendered only if the source changes).
 
 **Tier-0 fast paths**: no backtick → code splitting skipped (single passthrough segment); no math delimiters for the active mode → extraction skipped; restore/highlight/enhance no-op on empty results. Plain-prose documents pay zero feature overhead.
 
@@ -412,7 +417,7 @@ md_viewer/
 4. After 100ms debounce → `requestAnimationFrame(renderPreview)`
 5. `renderPreview()` commits synchronously: reads textarea value, extracts math (fast-pathed), parses Markdown via `mdParser`, sanitizes, updates preview DOM (scroll preserved), restores math placeholders, adds copy buttons
 6. Post-render: all external `<a>` links get `target="_blank" rel="noopener noreferrer"` injected
-7. `saveState()` persists content to `localStorage`
+7. `scheduleSave()` persists content to `localStorage` (throttled: 1.5s trailing write, flushed on tab hide/close)
 8. 250ms after the last commit → `runEnhance()`: chunked code highlighting, then MathJax typesetting of live spans only (both generation-guarded)
 
 ---
