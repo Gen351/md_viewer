@@ -74,7 +74,7 @@
     content: '',
     filename: '',
     fileHandle: null,
-    mathMode: MATH_MODES.OFF,
+    mathMode: MATH_MODES.DOLLARS,
     codeTheme: CODE_THEMES.AUTO,
     zoom: ZOOM_DEFAULT
   };
@@ -242,9 +242,9 @@
   function loadState() {
     state.theme = localStorage.getItem(STORAGE_KEYS.THEME) || 'light';
     state.viewMode = localStorage.getItem(STORAGE_KEYS.VIEW_MODE) || VIEW_MODES.SPLIT;
-    state.mathMode = localStorage.getItem(STORAGE_KEYS.MATH_MODE) || MATH_MODES.OFF;
+    state.mathMode = localStorage.getItem(STORAGE_KEYS.MATH_MODE) || MATH_MODES.DOLLARS;
     if (!Object.values(MATH_MODES).includes(state.mathMode)) {
-      state.mathMode = MATH_MODES.OFF;
+      state.mathMode = MATH_MODES.DOLLARS;
     }
     state.codeTheme = localStorage.getItem(STORAGE_KEYS.CODE_THEME) || CODE_THEMES.AUTO;
     if (!Object.values(CODE_THEMES).includes(state.codeTheme)) {
