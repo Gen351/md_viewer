@@ -35,6 +35,7 @@ All app state lives in a single `state` object:
 | `fileHandle` | `FileSystemFileHandle \| null` | Handle for direct file writes (File System Access API) |
 | `mathMode` | `string` | `'off'`, `'inline'`, `'display'`, `'dollars'`, `'latex'`, or `'all'` |
 | `codeTheme` | `string` | `'auto'`, `'github'`, `'github-dark'`, `'monokai'`, `'dracula'`, or `'nord'` |
+| `zoom` | `number` | Shared content zoom, `0.5`–`2.0` (default `1`) |
 
 ### localStorage Keys
 
@@ -46,6 +47,7 @@ All app state lives in a single `state` object:
 | `md-editor-filename` | Last opened filename |
 | `md-editor-math-mode` | Selected math rendering mode |
 | `md-editor-code-theme` | Selected code highlighting theme |
+| `md-editor-zoom` | Shared content zoom level |
 
 ### DOM Element IDs
 
@@ -65,6 +67,9 @@ All app state lives in a single `state` object:
 | `btnFocus` | `<button>` | Focus view mode |
 | `btnSplit` | `<button>` | Split view mode |
 | `btnViewOnly` | `<button>` | View-only mode |
+| `btnZoomOut` | `<button>` | Zoom content out (disabled at 50%) |
+| `btnZoomReset` | `<button>` | Shows current zoom %, click resets to 100% |
+| `btnZoomIn` | `<button>` | Zoom content in (disabled at 200%) |
 | `btnOpen` | `<button>` | Open file picker |
 | `btnSave` | `<button>` | Save file |
 | `btnShare` | `<button>` | Copy shareable link |
@@ -98,6 +103,10 @@ Three mutually exclusive modes controlled by CSS class toggling:
 | **View-Only** | Hidden | Visible | Editor gets `.hidden` → same collapse behavior |
 
 Mode is persisted in `localStorage` and restored on load. `Escape` key resets to Split.
+
+### Content Zoom
+
+`+` / `−` buttons beside the view-mode switcher scale the editor and preview together (single shared level via the `--content-zoom` variable, using the CSS `zoom` property so layout scales too). Steps of 10% between 50% and 200%; the `%` label between the buttons shows the current level and resets to 100% on click. Buttons disable at the limits. Persisted in `localStorage` (`md-editor-zoom`).
 
 Hidden panes are also removed from keyboard focus and assistive tech: the pane gets `inert` + `aria-hidden` (with a CSS `visibility: hidden` fallback for browsers without `inert` support), so Tab traversal and screen readers never enter a hidden pane.
 
@@ -223,7 +232,7 @@ Fenced code blocks with an explicit language tag are syntax-highlighted via **hi
 
 ### Settings Menu
 
-File and display settings live behind the **gear button** in header-right: Open / Save / Share rows, a **Math ▸** flyout (the six math modes), a **Code Themes ▸** flyout, and the icon-only theme button. Both flyouts open leftward so they never clip off the viewport edge (on ≤480px screens they expand inline instead). The menu closes on outside click, on `Escape` (before the split-view reset), and on row activation; arrow keys navigate rows; focus returns to the gear on dismiss.
+File and display settings live behind the **gear button** in header-right: Open / Save / Share rows, a **Math ▸** flyout (the six math modes), a **Code Themes ▸** flyout, and the icon-only theme button. Both flyouts open leftward so they never clip off the viewport edge (on ≤480px screens they expand inline instead). Picking a math mode or code theme applies it and moves the ✓ checkmark but leaves the menu open, so more options can be tried. The menu closes only on outside click, on `Escape` (before the split-view reset), on the gear button, or on Open/Save/Share (which launch pickers/modals); arrow keys navigate rows; focus returns to the gear on dismiss.
 
 ### Live Preview Rendering Pipeline
 
@@ -272,6 +281,8 @@ TIER 2 — async enhance (trailing 250ms after typing pauses):
 ### Theming System
 
 Implemented via **CSS custom properties** scoped to `:root` and `[data-theme="dark"]`:
+
+Scrollbars follow the theme too: `color-scheme` switches with the theme (plus `scrollbar-color` for Firefox and `::-webkit-scrollbar` rules for Chromium/Safari, tinted with theme vars on the editor, preview pane, and code blocks).
 
 | Variable | Light | Dark | Usage |
 |----------|-------|------|-------|
@@ -390,7 +401,7 @@ md_viewer/
 - `elements.editor.addEventListener('input', ...)` for live preview triggering
 - `elements.editor.addEventListener('keydown', handleTabKey)` for Tab interception
 - `elements.preview.addEventListener('click', handlePreviewClick)` for TOC smooth-scroll navigation
-- Settings menu: `menuBtn` toggles the panel, flyout parents toggle side panels, option buttons apply + close; document `pointerdown` closes on outside clicks; `settingsMenu` handles arrow-key navigation
+- Settings menu: `menuBtn` toggles the panel, flyout parents toggle side panels, option buttons apply without closing; document `pointerdown` closes on outside clicks; `settingsMenu` handles arrow-key navigation
 - Toolbar buttons and view buttons use individual `addEventListener('click', ...)`
 - File input uses `change` event
 

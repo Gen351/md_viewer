@@ -7,7 +7,8 @@
     CONTENT: 'md-editor-content',
     FILENAME: 'md-editor-filename',
     MATH_MODE: 'md-editor-math-mode',
-    CODE_THEME: 'md-editor-code-theme'
+    CODE_THEME: 'md-editor-code-theme',
+    ZOOM: 'md-editor-zoom'
   };
 
   const VIEW_MODES = {
@@ -52,6 +53,11 @@
   const ENHANCE_DELAY = 250;
   const ENHANCE_CHUNK = 6;
 
+  const ZOOM_DEFAULT = 1;
+  const ZOOM_STEP = 0.1;
+  const ZOOM_MIN = 0.5;
+  const ZOOM_MAX = 2;
+
   // Max total length (chars) of a generated share link. The file travels in
   // the URL fragment, which is never sent to a server, so only browser-side
   // limits apply (Chromium hard cap: 2MB; Firefox history: 2000 chars;
@@ -66,7 +72,8 @@
     filename: '',
     fileHandle: null,
     mathMode: MATH_MODES.OFF,
-    codeTheme: CODE_THEMES.AUTO
+    codeTheme: CODE_THEMES.AUTO,
+    zoom: ZOOM_DEFAULT
   };
 
   const elements = {
@@ -84,6 +91,9 @@
     btnFocus: null,
     btnSplit: null,
     btnViewOnly: null,
+    btnZoomIn: null,
+    btnZoomOut: null,
+    btnZoomReset: null,
     btnOpen: null,
     btnSave: null,
     btnShare: null,
@@ -133,6 +143,7 @@
     loadState();
     applyTheme();
     applyViewMode();
+    applyZoom();
     applyMathMode();
     applyCodeTheme();
     configureMarked();
@@ -190,6 +201,9 @@
     elements.btnFocus = document.getElementById('btnFocus');
     elements.btnSplit = document.getElementById('btnSplit');
     elements.btnViewOnly = document.getElementById('btnViewOnly');
+    elements.btnZoomIn = document.getElementById('btnZoomIn');
+    elements.btnZoomOut = document.getElementById('btnZoomOut');
+    elements.btnZoomReset = document.getElementById('btnZoomReset');
     elements.btnOpen = document.getElementById('btnOpen');
     elements.btnSave = document.getElementById('btnSave');
     elements.btnShare = document.getElementById('btnShare');
@@ -222,6 +236,10 @@
     if (!Object.values(CODE_THEMES).includes(state.codeTheme)) {
       state.codeTheme = CODE_THEMES.AUTO;
     }
+    const savedZoom = parseFloat(localStorage.getItem(STORAGE_KEYS.ZOOM));
+    state.zoom = Number.isFinite(savedZoom)
+      ? Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, savedZoom))
+      : ZOOM_DEFAULT;
 
     // Check if content was passed via URL hash (cross-origin import)
     let hashContent = '';
@@ -338,6 +356,28 @@
     btnSplit.classList.toggle('active', state.viewMode === VIEW_MODES.SPLIT);
     btnViewOnly.classList.toggle('active', state.viewMode === VIEW_MODES.VIEW_ONLY);
   }
+
+  // Shared content zoom for editor + preview (single level, both panes).
+  function applyZoom() {
+    document.documentElement.style.setProperty('--content-zoom', state.zoom);
+    localStorage.setItem(STORAGE_KEYS.ZOOM, String(state.zoom));
+    if (elements.btnZoomReset) {
+      elements.btnZoomReset.textContent = Math.round(state.zoom * 100) + '%';
+    }
+    if (elements.btnZoomIn) elements.btnZoomIn.disabled = state.zoom >= ZOOM_MAX;
+    if (elements.btnZoomOut) elements.btnZoomOut.disabled = state.zoom <= ZOOM_MIN;
+  }
+
+  function setZoom(value) {
+    const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(value * 10) / 10));
+    if (next === state.zoom) return;
+    state.zoom = next;
+    applyZoom();
+  }
+
+  function zoomIn() { setZoom(state.zoom + ZOOM_STEP); }
+  function zoomOut() { setZoom(state.zoom - ZOOM_STEP); }
+  function resetZoom() { setZoom(ZOOM_DEFAULT); }
 
   // Order used by Ctrl+M to cycle through the math modes.
   const MATH_MODE_ORDER = [
@@ -1102,6 +1142,9 @@
     elements.btnFocus.addEventListener('click', () => setViewMode(VIEW_MODES.FOCUS));
     elements.btnSplit.addEventListener('click', () => setViewMode(VIEW_MODES.SPLIT));
     elements.btnViewOnly.addEventListener('click', () => setViewMode(VIEW_MODES.VIEW_ONLY));
+    elements.btnZoomIn.addEventListener('click', zoomIn);
+    elements.btnZoomOut.addEventListener('click', zoomOut);
+    elements.btnZoomReset.addEventListener('click', resetZoom);
 
     elements.btnOpen.addEventListener('click', openFileWithPicker);
     elements.btnSave.addEventListener('click', saveFile);
@@ -1112,15 +1155,15 @@
     elements.mathMenuBtn.addEventListener('click', () => toggleFlyout(elements.mathMenuBtn, elements.mathFlyout));
     elements.codeMenuBtn.addEventListener('click', () => toggleFlyout(elements.codeMenuBtn, elements.codeFlyout));
     elements.mathFlyout.querySelectorAll('[data-value]').forEach(opt => {
+      // Menu lingers: applying an option keeps the menu + flyout open so
+      // more options can be tried. Focus stays on the picked option.
       opt.addEventListener('click', () => {
         setMathMode(opt.getAttribute('data-value'));
-        closeMenu(true);
       });
     });
     elements.codeFlyout.querySelectorAll('[data-value]').forEach(opt => {
       opt.addEventListener('click', () => {
         setCodeTheme(opt.getAttribute('data-value'));
-        closeMenu(true);
       });
     });
     elements.settingsMenu.addEventListener('keydown', handleMenuKeys);

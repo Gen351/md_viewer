@@ -20,9 +20,13 @@
   --transition: 0.2s ease;
   --font-mono: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --content-zoom: 1;
+  color-scheme: light;
+  scrollbar-color: var(--text-muted) transparent;
 }
 
 [data-theme="dark"] {
+  color-scheme: dark;
   --bg-primary: #1a1b1e;
   --bg-secondary: #25262b;
   --bg-tertiary: #2c2e33;
@@ -157,6 +161,57 @@ html, body {
   background: var(--accent-light);
   color: var(--accent);
   border-color: var(--accent);
+}
+
+.btn-view:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.btn-view:disabled:hover {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.zoom-level {
+  font-variant-numeric: tabular-nums;
+  min-width: 3.25rem;
+}
+
+/* Themed scrollbars (Chromium/Safari): track stays transparent so the pane
+   background shows through; thumb follows the theme's muted text color. */
+.editor::-webkit-scrollbar,
+.preview-pane::-webkit-scrollbar,
+.preview pre::-webkit-scrollbar,
+.preview mjx-container[jax="CHTML"]::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.editor::-webkit-scrollbar-track,
+.preview-pane::-webkit-scrollbar-track,
+.preview pre::-webkit-scrollbar-track,
+.preview mjx-container[jax="CHTML"]::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.editor::-webkit-scrollbar-thumb,
+.preview-pane::-webkit-scrollbar-thumb,
+.preview pre::-webkit-scrollbar-thumb,
+.preview mjx-container[jax="CHTML"]::-webkit-scrollbar-thumb {
+  background: var(--text-muted);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.editor::-webkit-scrollbar-thumb:hover,
+.preview-pane::-webkit-scrollbar-thumb:hover,
+.preview pre::-webkit-scrollbar-thumb:hover,
+.preview mjx-container[jax="CHTML"]::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+  border: 2px solid transparent;
+  background-clip: content-box;
 }
 
 .btn-toolbar {
@@ -345,6 +400,7 @@ html, body {
   outline: none;
   resize: none;
   tab-size: 2;
+  zoom: var(--content-zoom);
   transition: background var(--transition), color var(--transition);
 }
 
@@ -365,6 +421,7 @@ html, body {
   max-width: 900px;
   margin: 0 auto;
   min-height: 100%;
+  zoom: var(--content-zoom);
 }
 
 .preview h1, .preview h2, .preview h3,
