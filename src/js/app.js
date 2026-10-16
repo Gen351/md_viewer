@@ -8,7 +8,8 @@
     FILENAME: 'md-editor-filename',
     MATH_MODE: 'md-editor-math-mode',
     CODE_THEME: 'md-editor-code-theme',
-    ZOOM: 'md-editor-zoom'
+    ZOOM: 'md-editor-zoom',
+    SPLIT: 'md-editor-split'
   };
 
   const VIEW_MODES = {
@@ -61,6 +62,13 @@
   const ZOOM_MIN = 0.5;
   const ZOOM_MAX = 2;
 
+  // Draggable split: editor fraction clamps to [SPLIT_MIN, SPLIT_MAX];
+  // pushing past either edge arms a snap-collapse of that pane.
+  const SPLIT_DEFAULT = 0.5;
+  const SPLIT_MIN = 0.2;
+  const SPLIT_MAX = 0.8;
+  const SPLIT_KEY_STEP = 0.02;
+
   // Max total length (chars) of a generated share link. The file travels in
   // the URL fragment, which is never sent to a server, so only browser-side
   // limits apply (Chromium hard cap: 2MB; Firefox history: 2000 chars;
@@ -76,7 +84,8 @@
     fileHandle: null,
     mathMode: MATH_MODES.DISPLAY,
     codeTheme: CODE_THEMES.AUTO,
-    zoom: ZOOM_DEFAULT
+    zoom: ZOOM_DEFAULT,
+    split: SPLIT_DEFAULT
   };
 
   const elements = {
@@ -85,6 +94,8 @@
     editorPane: null,
     preview: null,
     previewPane: null,
+    paneDivider: null,
+    snapHint: null,
     btnBold: null,
     btnH1: null,
     btnItalic: null,
@@ -206,6 +217,8 @@
     elements.editorPane = document.getElementById('editorPane');
     elements.preview = document.getElementById('preview');
     elements.previewPane = document.getElementById('previewPane');
+    elements.paneDivider = document.getElementById('paneDivider');
+    elements.snapHint = document.getElementById('snapHint');
     elements.btnBold = document.getElementById('btnBold');
     elements.btnH1 = document.getElementById('btnH1');
     elements.btnItalic = document.getElementById('btnItalic');
@@ -254,6 +267,10 @@
     state.zoom = Number.isFinite(savedZoom)
       ? Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, savedZoom))
       : ZOOM_DEFAULT;
+    const savedSplit = parseFloat(localStorage.getItem(STORAGE_KEYS.SPLIT));
+    state.split = Number.isFinite(savedSplit)
+      ? Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, savedSplit))
+      : SPLIT_DEFAULT;
 
     // Check if content was passed via URL hash (cross-origin import)
     let hashContent = '';
@@ -374,6 +391,7 @@
 
     updateViewButtons();
     localStorage.setItem(STORAGE_KEYS.VIEW_MODE, state.viewMode);
+    applyDivider();
   }
 
   function setViewMode(mode) {
@@ -410,6 +428,151 @@
   function zoomIn() { setZoom(state.zoom + ZOOM_STEP); }
   function zoomOut() { setZoom(state.zoom - ZOOM_STEP); }
   function resetZoom() { setZoom(ZOOM_DEFAULT); }
+
+  // Draggable split divider. In Split mode the divider is visible and the
+  // saved fraction applies; other modes hide it and clear inline sizing.
+  let dragState = null;
+  let dragRafQueued = false;
+
+  function applyDivider() {
+    const { editorPane, previewPane, paneDivider } = elements;
+    if (!paneDivider) return;
+    if (state.viewMode !== VIEW_MODES.SPLIT) {
+      paneDivider.classList.add('hidden');
+      editorPane.style.flex = '';
+      previewPane.style.flex = '';
+      return;
+    }
+    paneDivider.classList.remove('hidden');
+    applySplit();
+  }
+
+  function applySplit() {
+    const { editorPane, previewPane, paneDivider } = elements;
+    if (state.viewMode !== VIEW_MODES.SPLIT) return;
+    const pct = state.split * 100;
+    editorPane.style.flex = `0 0 ${pct}%`;
+    previewPane.style.flex = '';
+    if (paneDivider) paneDivider.setAttribute('aria-valuenow', String(Math.round(pct)));
+    localStorage.setItem(STORAGE_KEYS.SPLIT, String(state.split));
+  }
+
+  function setSplit(fraction) {
+    state.split = Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, fraction));
+    applySplit();
+  }
+
+  function resetSplit() {
+    state.split = SPLIT_DEFAULT;
+    applySplit();
+    if (elements.paneDivider) elements.paneDivider.focus();
+  }
+
+  function fractionFromClientX(clientX) {
+    const rect = elements.appMain.getBoundingClientRect();
+    if (rect.width <= 0) return state.split;
+    return (clientX - rect.left) / rect.width;
+  }
+
+  function updateSnapPreview(fraction) {
+    const { appMain, snapHint } = elements;
+    appMain.classList.remove('snap-collapse-editor', 'snap-collapse-preview');
+    let armed = null;
+    if (fraction < SPLIT_MIN) armed = 'editor';
+    else if (fraction > SPLIT_MAX) armed = 'preview';
+    if (armed) {
+      appMain.classList.add(armed === 'editor' ? 'snap-collapse-editor' : 'snap-collapse-preview');
+      snapHint.textContent = `Release to close ${armed === 'editor' ? 'editor' : 'preview'}`;
+      snapHint.classList.remove('hidden');
+    } else {
+      snapHint.classList.add('hidden');
+    }
+    return armed;
+  }
+
+  function clearSnapPreview() {
+    elements.appMain.classList.remove('snap-collapse-editor', 'snap-collapse-preview');
+    elements.snapHint.classList.add('hidden');
+  }
+
+  function paintDrag(fraction) {
+    // Live-follow the pointer even past the snap edge (down to a sliver)
+    // so the collapse preview feels attached to the cursor.
+    const live = Math.min(0.96, Math.max(0.04, fraction));
+    elements.editorPane.style.flex = `0 0 ${live * 100}%`;
+    elements.previewPane.style.flex = '';
+    updateSnapPreview(fraction);
+  }
+
+  function startDividerDrag(clientX) {
+    if (state.viewMode !== VIEW_MODES.SPLIT) return;
+    dragState = { startSplit: state.split, fraction: fractionFromClientX(clientX), armed: null };
+    elements.appMain.classList.add('dragging');
+  }
+
+  function moveDividerDrag(clientX) {
+    if (!dragState) return;
+    dragState.fraction = fractionFromClientX(clientX);
+    if (dragRafQueued) return;
+    dragRafQueued = true;
+    requestAnimationFrame(() => {
+      dragRafQueued = false;
+      if (!dragState) return;
+      paintDrag(dragState.fraction);
+    });
+  }
+
+  function endDividerDrag(commit) {
+    if (!dragState) return;
+    const { fraction, startSplit } = dragState;
+    dragState = null;
+    elements.appMain.classList.remove('dragging');
+    clearSnapPreview();
+    if (!commit) {
+      // Cancelled (Escape): restore the pre-drag split.
+      state.split = startSplit;
+      applySplit();
+      return;
+    }
+    if (fraction < SPLIT_MIN) {
+      setViewMode(VIEW_MODES.VIEW_ONLY);
+    } else if (fraction > SPLIT_MAX) {
+      setViewMode(VIEW_MODES.FOCUS);
+    } else {
+      setSplit(fraction);
+    }
+  }
+
+  function handleDividerKeys(e) {
+    if (state.viewMode !== VIEW_MODES.SPLIT) return;
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      e.preventDefault();
+      const next = state.split + (e.key === 'ArrowRight' ? SPLIT_KEY_STEP : -SPLIT_KEY_STEP);
+      if (next < SPLIT_MIN) {
+        state.split = SPLIT_MIN;
+        applySplit();
+        updateSnapPreview(next);
+      } else if (next > SPLIT_MAX) {
+        state.split = SPLIT_MAX;
+        applySplit();
+        updateSnapPreview(next);
+      } else {
+        clearSnapPreview();
+        setSplit(next);
+      }
+    } else if (e.key === 'Enter') {
+      // Commit an armed keyboard snap.
+      if (elements.appMain.classList.contains('snap-collapse-editor')) {
+        clearSnapPreview();
+        setViewMode(VIEW_MODES.VIEW_ONLY);
+      } else if (elements.appMain.classList.contains('snap-collapse-preview')) {
+        clearSnapPreview();
+        setViewMode(VIEW_MODES.FOCUS);
+      }
+    } else if (e.key === 'Escape') {
+      clearSnapPreview();
+    }
+  }
 
   // Order used by Ctrl+M to cycle through the math modes.
   const MATH_MODE_ORDER = [
@@ -1241,6 +1404,26 @@
     elements.fileInput.addEventListener('change', handleFileSelect);
 
     elements.menuBtn.addEventListener('click', toggleMenu);
+    elements.paneDivider.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 && e.pointerType === 'mouse') return;
+      e.preventDefault();
+      elements.paneDivider.setPointerCapture(e.pointerId);
+      startDividerDrag(e.clientX);
+    });
+    elements.paneDivider.addEventListener('pointermove', (e) => {
+      moveDividerDrag(e.clientX);
+    });
+    elements.paneDivider.addEventListener('pointerup', () => {
+      endDividerDrag(true);
+    });
+    elements.paneDivider.addEventListener('pointercancel', () => {
+      endDividerDrag(false);
+    });
+    elements.paneDivider.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      resetSplit();
+    });
+    elements.paneDivider.addEventListener('keydown', handleDividerKeys);
     elements.mathMenuBtn.addEventListener('click', () => toggleFlyout(elements.mathMenuBtn, elements.mathFlyout));
     elements.codeMenuBtn.addEventListener('click', () => toggleFlyout(elements.codeMenuBtn, elements.codeFlyout));
     elements.mathFlyout.querySelectorAll('[data-value]').forEach(opt => {
@@ -1413,6 +1596,13 @@
       if (isShareModalOpen()) {
         e.preventDefault();
         closeShareModal();
+        return;
+      }
+      // A mid-drag Escape cancels the drag (restores pre-drag split)
+      // instead of touching the view mode.
+      if (dragState) {
+        e.preventDefault();
+        endDividerDrag(false);
         return;
       }
       if (isMenuOpen()) {

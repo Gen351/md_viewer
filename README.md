@@ -29,6 +29,7 @@ All app state lives in a single `state` object:
 | Property | Type | Description |
 |----------|------|-------------|
 | `viewMode` | `string` | `'focus'`, `'split'`, or `'view-only'` |
+| `split` | `number` | Editor fraction in split mode, `0.2`–`0.8` (default `0.5`) |
 | `theme` | `string` | `'light'` or `'dark'` |
 | `content` | `string` | Current editor text |
 | `filename` | `string` | Name of the opened/saved file |
@@ -43,6 +44,7 @@ All app state lives in a single `state` object:
 |-----|--------|
 | `md-editor-theme` | Current theme (`'light'` / `'dark'`) |
 | `md-editor-view-mode` | Current view mode (`'focus'` / `'split'` / `'view-only'`) |
+| `md-editor-split` | Editor pane fraction for split mode |
 | `md-editor-content` | Editor content (auto-saved on every render) |
 | `md-editor-filename` | Last opened filename |
 | `md-editor-math-mode` | Selected math rendering mode |
@@ -58,6 +60,8 @@ All app state lives in a single `state` object:
 | `editorPane` | `<div>` | Left pane wrapper (`.pane.editor-pane`) |
 | `preview` | `<div>` | Rendered HTML output container |
 | `previewPane` | `<div>` | Right pane wrapper (`.pane.preview-pane`) |
+| `paneDivider` | `<div>` | Draggable split handle (`role="separator"`, Split mode only) |
+| `snapHint` | `<div>` | Snap-collapse hint badge shown while a collapse is armed |
 | `btnBold` | `<button>` | Bold formatting |
 | `btnH1` | `<button>` | Heading 1 insertion |
 | `btnItalic` | `<button>` | Italic formatting |
@@ -390,8 +394,9 @@ md_viewer/
 ### Layout
 - Header: `position: sticky; top: 0; z-index: 100` with three-section flex layout (`header-left`, `header-center`, `header-right`)
 - `header-left` and `header-right` both have `flex: 1` to center `header-center`
-- Main area: `display: flex; height: calc(100vh - 52px)` for full-viewport minus header
+- Main area: `display: flex` column on `body` (`100dvh`, `overflow: hidden`) with `.app-main { flex: 1; min-height: 0 }` — the page itself never scrolls, so no phantom outer scrollbar; panes scroll internally
 - Panes: `flex: 1` with `overflow: hidden`; hidden panes collapse via `flex: 0 0 0`
+- Split divider (`#paneDivider`, Split mode only): drag to resize 20–80%; pushing past either edge arms a Windows-snap-style collapse preview (dying pane fades, survivor glows, hint badge) committed on release to the matching view mode; double-click resets to 50/50; `Escape` mid-drag cancels; keyboard arrows nudge, `Enter` commits an armed snap
 - Preview pane: `scroll-behavior: smooth` for anchor-based smooth scrolling
 - Responsive: at `≤768px`, header wraps, center section goes full-width below, panes stack vertically
 
@@ -407,6 +412,7 @@ md_viewer/
 - `elements.editor.addEventListener('keydown', handleTabKey)` for Tab interception
 - `elements.preview.addEventListener('click', handlePreviewClick)` for TOC smooth-scroll navigation
 - Settings menu: `menuBtn` toggles the panel, flyout parents toggle side panels, option buttons apply without closing; document `pointerdown` closes on outside clicks; `settingsMenu` handles arrow-key navigation
+- Split divider: `pointerdown` (with pointer capture) starts a drag, `pointermove` updates via rAF, `pointerup` commits resize or snap, `pointercancel` aborts; `dblclick` resets; divider `keydown` handles arrows/`Enter`/`Escape`
 - Toolbar buttons and view buttons use individual `addEventListener('click', ...)`
 - File input uses `change` event
 

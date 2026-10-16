@@ -58,6 +58,17 @@ html, body {
   transition: background var(--transition), color var(--transition);
 }
 
+/* Full-viewport flex column: the header takes its natural height and the
+   main area fills the rest. The page itself never scrolls (panes scroll
+   internally), so no phantom outer scrollbar can appear. */
+body {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+
 .app-header {
   display: flex;
   align-items: center;
@@ -69,6 +80,7 @@ html, body {
   position: sticky;
   top: 0;
   z-index: 100;
+  flex-shrink: 0;
   transition: background var(--transition), border-color var(--transition);
 }
 
@@ -362,12 +374,15 @@ html, body {
 
 .app-main {
   display: flex;
-  height: calc(100vh - 52px);
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
+  position: relative;
 }
 
 .pane {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   visibility: visible;
   transition: flex var(--transition), opacity var(--transition), visibility var(--transition);
@@ -379,6 +394,89 @@ html, body {
   pointer-events: none;
   min-width: 0;
   visibility: hidden;
+}
+
+/* Draggable split divider (Split mode only). No flex transition here: the
+   handle follows the pointer 1:1 during drags; transitions apply only to
+   the snap-preview settle on release. */
+.pane-divider {
+  flex: 0 0 10px;
+  margin: 0 -3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 50;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition);
+}
+
+.pane-divider.hidden {
+  display: none;
+}
+
+.pane-divider:hover,
+.pane-divider:focus-visible {
+  background: var(--bg-tertiary);
+  outline: none;
+}
+
+.pane-divider:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.pane-divider-grip {
+  width: 4px;
+  height: 2.5rem;
+  border-radius: 2px;
+  background: var(--border-color);
+  transition: background var(--transition);
+  pointer-events: none;
+}
+
+.pane-divider:hover .pane-divider-grip,
+.pane-divider:focus-visible .pane-divider-grip,
+.app-main.dragging .pane-divider-grip {
+  background: var(--accent);
+}
+
+/* Snap preview (Windows-snap style): while the drag sits past the 20%
+   threshold, the dying pane collapses with an ease and the survivor glows.
+   Nothing is committed until pointerup. */
+.app-main.snap-collapse-editor .editor-pane,
+.app-main.snap-collapse-preview .preview-pane {
+  opacity: 0.25;
+}
+
+.app-main.snap-collapse-editor .preview-pane {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.app-main.snap-collapse-preview .editor-pane {
+  box-shadow: inset -3px 0 0 var(--accent);
+}
+
+.snap-hint {
+  position: absolute;
+  left: 50%;
+  top: 1rem;
+  transform: translateX(-50%);
+  padding: 0.375rem 0.75rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  z-index: 60;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.snap-hint.hidden {
+  display: none;
 }
 
 .editor-pane {
@@ -726,6 +824,11 @@ html, body {
 
   .app-main {
     flex-direction: column;
+  }
+
+  /* No side-by-side panes on mobile: divider drag is disabled. */
+  .pane-divider {
+    display: none;
   }
 
   /* On mobile the preview (reading) pane goes on top, editor below. */
