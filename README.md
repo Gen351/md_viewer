@@ -201,7 +201,7 @@ Scrolling either pane proportionally scrolls the other (`syncScroll`):
 
 ### Math (LaTeX) Rendering
 
-Optional LaTeX math via **MathJax v3** (`tex-chtml`, pinned), enabled via the **Math submenu** in the settings menu (gear icon, header-right; default **$ + $$**, so `$H_{in}$` and `$$...$$` typeset out of the box — switch to **Off** for literal dollars):
+Optional LaTeX math via **MathJax v3** (`tex-chtml`, pinned), enabled via the **Math submenu** in the settings menu (gear icon, header-right; default **$$**, so `$$...$$` display math works out of the box while single `$` stays literal text for currency — switch to **$** or **$ + $$** for inline math):
 
 | Mode | Active delimiters |
 |------|-------------------|
