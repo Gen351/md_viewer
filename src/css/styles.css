@@ -416,6 +416,13 @@ body {
   display: none;
 }
 
+/* While dragging, flex must apply instantly (1:1 pointer follow) — the base
+   .pane flex transition would otherwise trail ~200ms behind the cursor and
+   feel sluggish. Opacity/visibility transitions stay for the snap preview. */
+.app-main.dragging .pane {
+  transition: opacity var(--transition), visibility var(--transition);
+}
+
 .pane-divider:hover,
 .pane-divider:focus-visible {
   background: var(--bg-tertiary);

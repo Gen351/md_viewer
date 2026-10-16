@@ -497,21 +497,35 @@
 
   function paintDrag(fraction) {
     // Live-follow the pointer even past the snap edge (down to a sliver)
-    // so the collapse preview feels attached to the cursor.
+    // so the collapse preview feels attached to the cursor. Writes are
+    // guarded so unchanged values don't trigger useless style recalc.
     const live = Math.min(0.96, Math.max(0.04, fraction));
-    elements.editorPane.style.flex = `0 0 ${live * 100}%`;
-    elements.previewPane.style.flex = '';
-    updateSnapPreview(fraction);
+    const flexValue = `0 0 ${live * 100}%`;
+    if (elements.editorPane.style.flex !== flexValue) {
+      elements.editorPane.style.flex = flexValue;
+    }
+    if (elements.previewPane.style.flex !== '') {
+      elements.previewPane.style.flex = '';
+    }
+    const armed = updateSnapPreview(fraction);
+    dragState.armed = armed;
   }
 
   function startDividerDrag(clientX) {
     if (state.viewMode !== VIEW_MODES.SPLIT) return;
-    dragState = { startSplit: state.split, fraction: fractionFromClientX(clientX), armed: null };
+    dragState = { startSplit: state.split, startX: clientX, fraction: fractionFromClientX(clientX), moved: false, armed: null };
     elements.appMain.classList.add('dragging');
   }
 
+  // A press without meaningful movement counts as a click (reset), not a
+  // drag — thresholded in pixels so hand jitter doesn't matter.
+  const DIVIDER_CLICK_TOLERANCE_PX = 4;
+
   function moveDividerDrag(clientX) {
     if (!dragState) return;
+    if (Math.abs(clientX - dragState.startX) > DIVIDER_CLICK_TOLERANCE_PX) {
+      dragState.moved = true;
+    }
     dragState.fraction = fractionFromClientX(clientX);
     if (dragRafQueued) return;
     dragRafQueued = true;
@@ -524,14 +538,19 @@
 
   function endDividerDrag(commit) {
     if (!dragState) return;
-    const { fraction, startSplit } = dragState;
+    const { fraction, startSplit, moved } = dragState;
     dragState = null;
     elements.appMain.classList.remove('dragging');
     clearSnapPreview();
     if (!commit) {
-      // Cancelled (Escape): restore the pre-drag split.
+      // Cancelled (Escape/pointercancel): restore the pre-drag split.
       state.split = startSplit;
       applySplit();
+      return;
+    }
+    if (!moved) {
+      // Plain click on the divider: reset to 50/50.
+      resetSplit();
       return;
     }
     if (fraction < SPLIT_MIN) {
