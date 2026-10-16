@@ -513,19 +513,12 @@
 
   function startDividerDrag(clientX) {
     if (state.viewMode !== VIEW_MODES.SPLIT) return;
-    dragState = { startSplit: state.split, startX: clientX, fraction: fractionFromClientX(clientX), moved: false, armed: null };
+    dragState = { startSplit: state.split, fraction: fractionFromClientX(clientX), armed: null };
     elements.appMain.classList.add('dragging');
   }
 
-  // A press without meaningful movement counts as a click (reset), not a
-  // drag — thresholded in pixels so hand jitter doesn't matter.
-  const DIVIDER_CLICK_TOLERANCE_PX = 4;
-
   function moveDividerDrag(clientX) {
     if (!dragState) return;
-    if (Math.abs(clientX - dragState.startX) > DIVIDER_CLICK_TOLERANCE_PX) {
-      dragState.moved = true;
-    }
     dragState.fraction = fractionFromClientX(clientX);
     if (dragRafQueued) return;
     dragRafQueued = true;
@@ -538,7 +531,7 @@
 
   function endDividerDrag(commit) {
     if (!dragState) return;
-    const { fraction, startSplit, moved } = dragState;
+    const { fraction, startSplit } = dragState;
     dragState = null;
     elements.appMain.classList.remove('dragging');
     clearSnapPreview();
@@ -546,11 +539,6 @@
       // Cancelled (Escape/pointercancel): restore the pre-drag split.
       state.split = startSplit;
       applySplit();
-      return;
-    }
-    if (!moved) {
-      // Plain click on the divider: reset to 50/50.
-      resetSplit();
       return;
     }
     if (fraction < SPLIT_MIN) {
@@ -1411,7 +1399,14 @@
     elements.btnCode.addEventListener('click', () => insertFormat('`', '`'));
 
     elements.btnFocus.addEventListener('click', () => setViewMode(VIEW_MODES.FOCUS));
-    elements.btnSplit.addEventListener('click', () => setViewMode(VIEW_MODES.SPLIT));
+    elements.btnSplit.addEventListener('click', () => {
+      // Re-clicking Split while already split resets the divider to 50/50.
+      if (state.viewMode === VIEW_MODES.SPLIT) {
+        resetSplit();
+      } else {
+        setViewMode(VIEW_MODES.SPLIT);
+      }
+    });
     elements.btnViewOnly.addEventListener('click', () => setViewMode(VIEW_MODES.VIEW_ONLY));
     elements.btnZoomIn.addEventListener('click', zoomIn);
     elements.btnZoomOut.addEventListener('click', zoomOut);

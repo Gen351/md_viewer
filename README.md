@@ -396,7 +396,7 @@ md_viewer/
 - `header-left` and `header-right` both have `flex: 1` to center `header-center`
 - Main area: `display: flex` column on `body` (`100dvh`, `overflow: hidden`) with `.app-main { flex: 1; min-height: 0 }` — the page itself never scrolls, so no phantom outer scrollbar; panes scroll internally
 - Panes: `flex: 1` with `overflow: hidden`; hidden panes collapse via `flex: 0 0 0`
-- Split divider (`#paneDivider`, Split mode only): drag to resize 20–80% (flex transition disabled mid-drag so the handle tracks the pointer 1:1); pushing past either edge arms a Windows-snap-style collapse preview (dying pane fades, survivor glows, hint badge) committed on release to the matching view mode; click resets to 50/50; `Escape` mid-drag cancels; keyboard arrows nudge, `Enter` commits an armed snap
+- Split divider (`#paneDivider`, Split mode only): drag to resize 20–80% (flex transition disabled mid-drag so the handle tracks the pointer 1:1); pushing past either edge arms a Windows-snap-style collapse preview (dying pane fades, survivor glows, hint badge) committed on release to the matching view mode; double-click the divider (or re-click the Split toolbar button while already split) resets to 50/50; `Escape` mid-drag cancels; keyboard arrows nudge, `Enter` commits an armed snap
 - Preview pane: `scroll-behavior: smooth` for anchor-based smooth scrolling
 - Responsive: at `≤768px`, header wraps, center section goes full-width below, panes stack vertically
 

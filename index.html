@@ -63,7 +63,7 @@
         <button class="btn btn-view" id="btnFocus" aria-label="Focus view" title="Focus (Editor only)">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="1" width="14" height="14" rx="2"/></svg>
         </button>
-        <button class="btn btn-view active" id="btnSplit" aria-label="Split view" title="Split view">
+        <button class="btn btn-view active" id="btnSplit" aria-label="Split view" title="Split view (click again to reset the split to 50/50)">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="1" width="6" height="14" rx="1"/><rect x="9" y="1" width="6" height="14" rx="1"/></svg>
         </button>
         <button class="btn btn-view" id="btnViewOnly" aria-label="View-only mode" title="View-only (Preview only)">
@@ -141,7 +141,7 @@
     <div class="pane editor-pane" id="editorPane">
       <textarea class="editor" id="editor" placeholder="Start typing your markdown here..." spellcheck="false"></textarea>
     </div>
-    <div class="pane-divider hidden" id="paneDivider" role="separator" aria-orientation="horizontal" aria-label="Resize editor and preview panes" aria-valuemin="20" aria-valuemax="80" aria-valuenow="50" tabindex="0" title="Click to reset to 50/50, drag to resize">
+    <div class="pane-divider hidden" id="paneDivider" role="separator" aria-orientation="horizontal" aria-label="Resize editor and preview panes" aria-valuemin="20" aria-valuemax="80" aria-valuenow="50" tabindex="0" title="Double-click to reset to 50/50, drag to resize">
       <span class="pane-divider-grip" aria-hidden="true"></span>
     </div>
     <div class="pane preview-pane" id="previewPane">
