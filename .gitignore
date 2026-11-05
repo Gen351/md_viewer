@@ -2,8 +2,19 @@
 AGENTS.md
 DEVELOPMENT_PLAN.md
 
+# Firebase config (local only)
+src/js/firebase-config.js
+
 # my tokens ;]
 super_secret_super_sensitive_very_expensive_tokens.txt
 
 # AI session log dumps
 session-ses_*.md
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
