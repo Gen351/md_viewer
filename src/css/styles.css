@@ -311,6 +311,61 @@ body {
   justify-content: space-between;
 }
 
+/* Standard Markdown toggle: a full-width menu row with a switch on the
+   right. aria-checked is the single source of truth for the on/off look. */
+.menu-toggle {
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.menu-toggle[aria-checked="true"] {
+  color: var(--text-primary);
+}
+
+.menu-switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 1.75rem;
+  height: 1rem;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  transition: background var(--transition), border-color var(--transition);
+}
+
+.menu-switch::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 0.125rem;
+  width: 0.75rem;
+  height: 0.75rem;
+  background: var(--text-muted);
+  border-radius: 50%;
+  transform: translateY(-50%);
+  transition: transform var(--transition), background var(--transition);
+}
+
+.menu-toggle[aria-checked="true"] .menu-switch {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.menu-toggle[aria-checked="true"] .menu-switch::after {
+  background: #fff;
+  transform: translateY(-50%) translateX(0.625rem);
+}
+
+.menu-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.menu-item:disabled:hover {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
 .flyout-arrow {
   color: var(--text-muted);
   font-size: 0.75rem;

@@ -8,6 +8,7 @@
     FILENAME: 'md-editor-filename',
     MATH_MODE: 'md-editor-math-mode',
     MATH_SPACING: 'md-editor-math-spacing',
+    MARKDOWN_MODE: 'md-editor-markdown-mode',
     CODE_THEME: 'md-editor-code-theme',
     ZOOM: 'md-editor-zoom',
     SPLIT: 'md-editor-split'
@@ -17,6 +18,14 @@
     FOCUS: 'focus',
     SPLIT: 'split',
     VIEW_ONLY: 'view-only'
+  };
+
+  // Site mode is this app's Markdown flavor (GFM plus extracted math and
+  // hover heading anchors). Standard mode is plain GFM: math delimiters stay
+  // literal text and headings render without the anchor link.
+  const MARKDOWN_MODES = {
+    SITE: 'site',
+    STANDARD: 'standard'
   };
 
   const MATH_MODES = {
@@ -97,6 +106,7 @@
     fileHandle: null,
     mathMode: MATH_MODES.DISPLAY,
     mathSpacing: MATH_SPACING_DEFAULT,
+    markdownMode: MARKDOWN_MODES.SITE,
     codeTheme: CODE_THEMES.AUTO,
     zoom: ZOOM_DEFAULT,
     split: SPLIT_DEFAULT
@@ -141,6 +151,7 @@
     mathSpacingValue: null,
     codeMenuBtn: null,
     codeFlyout: null,
+    btnStandardMode: null,
     hljsTheme: null,
     hljsScript: null
   };
@@ -148,6 +159,7 @@
   let debounceTimer = null;
 
   let mdParser = null;
+  let standardParser = null;
 
   // Tracks slug usage per render so duplicate headings get unique ids
   // (setup, setup-1, setup-2). Cleared at the start of every renderPreview().
@@ -187,6 +199,7 @@
     applyZoom();
     applyMathMode();
     applyMathSpacing();
+    applyMarkdownMode();
     applyCodeTheme();
     configureMarked();
     configureHljs();
@@ -204,27 +217,41 @@
       }).join('');
     }
 
-    mdParser = new marked.Marked({
-      renderer: {
-        heading({ tokens, depth }) {
-          const text = this.parser.parseInline(tokens);
-          const rawText = extractText(tokens);
-          const base = rawText.toLowerCase().normalize('NFKD').replace(/[^\p{L}\p{N}\s-]/gu, '').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'heading';
-          const seen = slugCounts.get(base) || 0;
-          slugCounts.set(base, seen + 1);
-          const id = seen === 0 ? base : `${base}-${seen}`;
-          const anchor = `<a class="anchor" href="#${id}" aria-label="Link to this section">#</a>`;
-          return `<h${depth} id="${id}">${anchor}${text}</h${depth}>\n`;
-        },
-        link({ href, title, tokens }) {
-          const text = this.parser.parseInline(tokens);
-          const titleAttr = title ? ` title="${title}"` : '';
-          if (href && href.startsWith('#')) {
-            return `<a href="${href}"${titleAttr}>${text}</a>`;
-          }
-          return `<a href="${href}"${titleAttr} target="_blank" rel="noopener noreferrer">${text}</a>`;
-        }
+    function headingRenderer(showAnchor) {
+      return function heading({ tokens, depth }) {
+        const text = this.parser.parseInline(tokens);
+        const rawText = extractText(tokens);
+        const base = rawText.toLowerCase().normalize('NFKD').replace(/[^\p{L}\p{N}\s-]/gu, '').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'heading';
+        const seen = slugCounts.get(base) || 0;
+        slugCounts.set(base, seen + 1);
+        const id = seen === 0 ? base : `${base}-${seen}`;
+        const anchor = showAnchor
+          ? `<a class="anchor" href="#${id}" aria-label="Link to this section">#</a>`
+          : '';
+        return `<h${depth} id="${id}">${anchor}${text}</h${depth}>\n`;
+      };
+    }
+
+    function linkRenderer({ href, title, tokens }) {
+      const text = this.parser.parseInline(tokens);
+      const titleAttr = title ? ` title="${title}"` : '';
+      if (href && href.startsWith('#')) {
+        return `<a href="${href}"${titleAttr}>${text}</a>`;
       }
+      return `<a href="${href}"${titleAttr} target="_blank" rel="noopener noreferrer">${text}</a>`;
+    }
+
+    // Both modes are GFM. They differ only in the app's presentation and
+    // math layers: site mode shows hover anchors and pre-extracts math;
+    // Standard mode leaves math delimiters as literal text and renders
+    // headings without anchors (IDs remain for in-preview TOC links).
+    mdParser = new marked.Marked({
+      gfm: true,
+      renderer: { heading: headingRenderer(true), link: linkRenderer }
+    });
+    standardParser = new marked.Marked({
+      gfm: true,
+      renderer: { heading: headingRenderer(false), link: linkRenderer }
     });
   }
 
@@ -267,6 +294,7 @@
     elements.mathSpacingValue = document.getElementById('mathSpacingValue');
     elements.codeMenuBtn = document.getElementById('codeMenuBtn');
     elements.codeFlyout = document.getElementById('codeFlyout');
+    elements.btnStandardMode = document.getElementById('btnStandardMode');
     elements.hljsTheme = document.getElementById('hljsTheme');
     elements.hljsScript = document.getElementById('hljsScript');
   }
@@ -277,6 +305,10 @@
     state.mathMode = localStorage.getItem(STORAGE_KEYS.MATH_MODE) || MATH_MODES.DISPLAY;
     if (!Object.values(MATH_MODES).includes(state.mathMode)) {
       state.mathMode = MATH_MODES.DISPLAY;
+    }
+    state.markdownMode = localStorage.getItem(STORAGE_KEYS.MARKDOWN_MODE) || MARKDOWN_MODES.SITE;
+    if (!Object.values(MARKDOWN_MODES).includes(state.markdownMode)) {
+      state.markdownMode = MARKDOWN_MODES.SITE;
     }
     state.codeTheme = localStorage.getItem(STORAGE_KEYS.CODE_THEME) || CODE_THEMES.AUTO;
     if (!Object.values(CODE_THEMES).includes(state.codeTheme)) {
@@ -732,6 +764,37 @@
     applyMathSpacing();
   }
 
+  function applyMarkdownMode() {
+    const standard = state.markdownMode === MARKDOWN_MODES.STANDARD;
+    if (elements.btnStandardMode) {
+      elements.btnStandardMode.setAttribute('aria-checked', standard ? 'true' : 'false');
+    }
+    // Standard mode has no math rendering. Disable the Math row and its
+    // slider, but keep the saved mode/spacing untouched so switching back
+    // restores the same settings. Only the Math flyout closes; the menu
+    // itself (and an open Code Themes flyout) stays put.
+    if (elements.mathMenuBtn) {
+      elements.mathMenuBtn.disabled = standard;
+      elements.mathMenuBtn.setAttribute('aria-disabled', standard ? 'true' : 'false');
+      if (standard) {
+        elements.mathFlyout.classList.add('hidden');
+        elements.mathMenuBtn.setAttribute('aria-expanded', 'false');
+      }
+    }
+    if (elements.mathSpacing) {
+      elements.mathSpacing.disabled = standard;
+    }
+    localStorage.setItem(STORAGE_KEYS.MARKDOWN_MODE, state.markdownMode);
+  }
+
+  function setMarkdownMode(mode) {
+    if (!Object.values(MARKDOWN_MODES).includes(mode)) return;
+    if (state.markdownMode === mode) return;
+    state.markdownMode = mode;
+    applyMarkdownMode();
+    renderPreview();
+  }
+
   function cycleMathMode() {
     const next = MATH_MODE_ORDER[(MATH_MODE_ORDER.indexOf(state.mathMode) + 1) % MATH_MODE_ORDER.length];
     setMathMode(next);
@@ -792,7 +855,7 @@
     if (e.target instanceof HTMLInputElement) return;
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
     const items = Array.from(elements.settingsMenu.querySelectorAll('button'))
-      .filter(b => b.offsetParent !== null);
+      .filter(b => !b.disabled && b.offsetParent !== null);
     if (!items.length) return;
     e.preventDefault();
     const i = items.indexOf(document.activeElement);
@@ -1210,12 +1273,16 @@
     // within this document still dedup (setup, setup-1, ...).
     slugCounts.clear();
 
-    // Pull LaTeX out before parsing so marked can't mangle it (e.g. the
-    // `*` in `$a*b$` would otherwise become emphasis). The markdown render
-    // itself stays fully synchronous; only the math pass below is async.
+    // Site mode pulls LaTeX out before parsing so marked can't mangle it
+    // (e.g. the `*` in `$a*b$` would otherwise become emphasis). Standard
+    // mode skips the math layer entirely, so delimiters stay literal and
+    // display-math lines are not isolated from surrounding Markdown.
+    // The markdown render itself stays fully synchronous; only the math
+    // pass below is async.
     pendingMaths = [];
+    const standardMode = state.markdownMode === MARKDOWN_MODES.STANDARD;
     let source = content;
-    if (state.mathMode !== MATH_MODES.OFF) {
+    if (!standardMode && state.mathMode !== MATH_MODES.OFF) {
       const flags = mathDelimitersActive();
       // Tier-0 fast path: skip extraction entirely when no math chars exist.
       if (hasMathChars(content, flags)) {
@@ -1225,7 +1292,7 @@
       }
     }
 
-    const html = mdParser.parse(source);
+    const html = (standardMode ? standardParser : mdParser).parse(source);
     const sanitized = DOMPurify.sanitize(html);
 
     // Preserve preview scroll across the full-DOM rebuild (the programmatic
@@ -1647,6 +1714,11 @@
         setCodeTheme(opt.getAttribute('data-value'));
       });
     });
+    elements.btnStandardMode.addEventListener('click', () => {
+      setMarkdownMode(state.markdownMode === MARKDOWN_MODES.STANDARD
+        ? MARKDOWN_MODES.SITE
+        : MARKDOWN_MODES.STANDARD);
+    });
     elements.settingsMenu.addEventListener('keydown', handleMenuKeys);
     document.addEventListener('pointerdown', handleOutsideMenu);
     if (elements.hljsScript) {
@@ -1786,7 +1858,9 @@
 
     if (modifier && key === 'm') {
       e.preventDefault();
-      cycleMathMode();
+      // Math rendering is unavailable in Standard Markdown mode; keep the
+      // saved math mode intact so switching back restores it.
+      if (state.markdownMode !== MARKDOWN_MODES.STANDARD) cycleMathMode();
     }
 
     if (modifier && key === 'z' && !e.shiftKey) {

@@ -14,14 +14,15 @@ User Input (keyboard/toolbar) → State Update → Debounce (100ms) → Render �
 
 ### Initialization Sequence
 1. `cacheElements()` — grabs all DOM references by ID
-2. `loadState()` — restores theme, view mode, content, filename from `localStorage`
+2. `loadState()` — restores theme, view mode, Markdown mode, content, filename from `localStorage`
 3. `applyTheme()` — sets `data-theme` attribute on `<html>`
 4. `applyViewMode()` — toggles `.hidden` class on panes
 5. `applyMathSpacing()` — restores the display-math spacing slider/`--math-display-gap`
-6. `configureMarked()` — creates `marked.Marked` instance with custom renderer (heading anchors, link targets)
-7. `bindEvents()` — attaches all event listeners
-8. `renderPreview()` — renders initial content
-9. `updateFilenameDisplay()` — shows filename badge if present
+6. `applyMarkdownMode()` — restores the Standard Markdown toggle and locks Math controls when active
+7. `configureMarked()` — creates the site and standard `marked.Marked` instances with custom renderers (heading anchors/IDs, link targets)
+8. `bindEvents()` — attaches all event listeners
+9. `renderPreview()` — renders initial content
+10. `updateFilenameDisplay()` — shows filename badge if present
 
 ### State Management
 
@@ -37,6 +38,7 @@ All app state lives in a single `state` object:
 | `fileHandle` | `FileSystemFileHandle \| null` | Handle for direct file writes (File System Access API) |
 | `mathMode` | `string` | `'off'`, `'inline'`, `'display'`, `'dollars'`, `'latex'`, or `'all'` |
 | `mathSpacing` | `number` | Display-equation spacing in rem, `0`–`3` (default `1`) |
+| `markdownMode` | `string` | `'site'` (default) or `'standard'` (plain GFM) |
 | `codeTheme` | `string` | `'auto'`, `'github'`, `'github-dark'`, `'monokai'`, `'dracula'`, or `'nord'` |
 | `zoom` | `number` | Shared content zoom, `0.5`–`2.0` (default `1`) |
 
@@ -51,6 +53,7 @@ All app state lives in a single `state` object:
 | `md-editor-filename` | Last opened filename |
 | `md-editor-math-mode` | Selected math rendering mode |
 | `md-editor-math-spacing` | Display-equation spacing in rem (`0`–`3`, default `1`) |
+| `md-editor-markdown-mode` | Markdown flavor (`'site'` or `'standard'`) |
 | `md-editor-code-theme` | Selected code highlighting theme |
 | `md-editor-zoom` | Shared content zoom level |
 
@@ -94,6 +97,7 @@ All app state lives in a single `state` object:
 | `mathSpacingValue` | `<output>` | Live slider value readout |
 | `codeMenuBtn` | `<button>` | Code Themes flyout parent row |
 | `codeFlyout` | `<div>` | Code theme options (`.flyout`) |
+| `btnStandardMode` | `<button>` | Standard Markdown toggle (`role="menuitemcheckbox"`) |
 | `hljsTheme` | `<link>` | Active highlight.js theme stylesheet (swapped on demand) |
 | `hljsScript` | `<script>` | highlight.js library tag (load detection) |
 | `fileInput` | `<input type="file">` | Hidden file input (fallback for open) |
@@ -159,7 +163,7 @@ All shortcuts detect the platform (User-Agent Client Hints, falling back to `nav
 | `Ctrl+Y` | `document.execCommand('redo')` | Triggers textarea redo, re-renders preview |
 | `Ctrl+Shift+Z` | `document.execCommand('redo')` | Alternate redo shortcut |
 | `Ctrl+D` | `toggleTheme()` | Switches between light/dark |
-| `Ctrl+M` | `cycleMathMode()` | Cycles math mode: Off → $ → $$ → $+$$ → LaTeX → All |
+| `Ctrl+M` | `cycleMathMode()` | Cycles math mode: Off → $ → $$ → $+$$ → LaTeX → All (disabled in Standard Markdown mode) |
 | `Escape` | Closes share modal if open, else settings menu, else `setViewMode('split')` | Closes modal/menu or resets to split view |
 | `Tab` | Inserts 2 spaces | Overrides native tab focus behavior |
 
@@ -209,9 +213,25 @@ Scrolling either pane proportionally scrolls the other (`syncScroll`):
 - Throttled with `requestAnimationFrame` (latest-wins); an epsilon check makes programmatic echoes no-ops, so a feedback loop is impossible
 - Disabled entirely while either pane is hidden (Focus / View-Only modes)
 
+### Standard Markdown Mode
+
+The **Standard Markdown** toggle at the bottom of the gear menu (directly below **Code Themes**) switches the preview from this app's Markdown flavor to plain **GitHub-flavored Markdown (GFM)**. It is off by default; the choice persists in `localStorage` (`md-editor-markdown-mode`) and re-renders immediately without closing the menu.
+
+| Behavior | Site mode (default) | Standard Markdown |
+|----------|---------------------|-------------------|
+| Tables, strikethrough, task lists, bare-URL autolinks | Yes (GFM) | Yes (GFM) |
+| `$…$`, `$$…$$`, `\(…\)`, `\[…\]` math | Rendered per the selected Math mode | Literal text |
+| Standalone display-math line isolation | Yes (prevents accidental setext headings) | No (standard Markdown rules apply) |
+| Hover `#` heading anchors | Yes | No — heading IDs remain for in-preview TOC links |
+| External links open in a new tab | Yes | Yes |
+| Syntax highlighting + Copy buttons | Yes | Yes |
+| DOMPurify sanitization | Yes | Yes |
+
+In Standard mode the **Math** row and its spacing slider are disabled and `Ctrl+M` does nothing. The saved math mode and spacing are kept, so turning the toggle off restores them exactly. If a `---` follows a paragraph without a blank line in Standard mode, it is a setext heading underline — that is standard Markdown behavior, not a bug.
+
 ### Math (LaTeX) Rendering
 
-Optional LaTeX math via **MathJax v3** (`tex-chtml`, pinned), enabled via the **Math submenu** in the settings menu (gear icon, header-right; default **$$**, so `$$...$$` display math works out of the box while single `$` stays literal text for currency — switch to **$** or **$ + $$** for inline math):
+Optional LaTeX math via **MathJax v3** (`tex-chtml`, pinned), enabled via the **Math submenu** in the settings menu (gear icon, header-right; default **$$**, so `$$...$$` display math works out of the box while single `$` stays literal text for currency — switch to **$** or **$ + $$** for inline math). This entire layer is skipped in **Standard Markdown** mode:
 
 | Mode | Active delimiters |
 |------|-------------------|
@@ -226,7 +246,7 @@ Optional LaTeX math via **MathJax v3** (`tex-chtml`, pinned), enabled via the **
 
 **Display spacing:** the bottom of the Math flyout has a **Display math spacing** slider (0–3rem, 0.25rem steps; default 1rem, matching the app's normal paragraph rhythm). It updates a `--math-display-gap` custom property on the preview live, so dragging previews immediately without a re-render. `0` makes equations flush with adjacent text; `3` is a deliberately generous maximum that stays within the preview. The value persists in `localStorage` (`md-editor-math-spacing`), and the slider's Arrow/Home/End keys adjust the value instead of moving menu focus.
 
-**Standalone display math:** a source line containing only `$$…$$` (or `\[…\]`) is normalized to its own Markdown paragraph before parsing. This keeps equations at normal text size and gives each one the slider spacing. Without this, a display-math line directly above `---` is valid Markdown for a **setext heading**, so the preceding text and formulas become one `<h2>` and the formulas inherit heading font sizes.
+**Standalone display math (site mode only):** a source line containing only `$$…$$` (or `\[…\]`) is normalized to its own Markdown paragraph before parsing. This keeps equations at normal text size and gives each one the slider spacing. Without this, a display-math line directly above `---` is valid Markdown for a **setext heading**, so the preceding text and formulas become one `<h2>` and the formulas inherit heading font sizes. Standard mode deliberately skips this normalization.
 
 **How it stays fast and correct:**
 - Before parsing, `extractMath()` pulls LaTeX spans into private-use Unicode placeholders (`U+E000…U+E001`, zero markdown meaning), so `marked` can't mangle them (the `*` in `$a*b$` would otherwise become emphasis). Markdown rendering stays fully synchronous on the 100ms debounce.
@@ -246,7 +266,7 @@ Fenced code blocks with an explicit language tag are syntax-highlighted via **hi
 
 ### Settings Menu
 
-File and display settings live behind the **gear button** in header-right: Open / Save / Share rows, a **Math ▸** flyout (the six math modes plus the **Display math spacing** slider at the bottom), a **Code Themes ▸** flyout, and the icon-only theme button. Both flyouts open leftward so they never clip off the viewport edge (on ≤480px screens they expand inline instead). Picking a math mode or code theme applies it and moves the ✓ checkmark but leaves the menu open, so more options can be tried. The menu closes only on outside click, on `Escape` (before the split-view reset), on the gear button, or on Open/Save/Share (which launch pickers/modals); arrow keys navigate rows (the range input keeps its own Arrow/Home/End behavior); focus returns to the gear on dismiss.
+File and display settings live behind the **gear button** in header-right: Open / Save / Share rows, a **Math ▸** flyout (the six math modes plus the **Display math spacing** slider at the bottom), a **Code Themes ▸** flyout, the **Standard Markdown** toggle, and the icon-only theme button. Both flyouts open leftward so they never clip off the viewport edge (on ≤480px screens they expand inline instead). Picking a math mode or code theme applies it and moves the ✓ checkmark but leaves the menu open, so more options can be tried; the Standard Markdown toggle likewise keeps the menu open. The Math row is disabled while Standard mode is active, and keyboard navigation skips it. The menu closes only on outside click, on `Escape` (before the split-view reset), on the gear button, or on Open/Save/Share (which launch pickers/modals); arrow keys navigate rows (the range input keeps its own Arrow/Home/End behavior); focus returns to the gear on dismiss.
 
 ### Live Preview Rendering Pipeline
 
@@ -262,9 +282,9 @@ requestAnimationFrame(renderPreview()) — batches to next paint
 TIER 1 — sync commit (every keystroke):
   Tier-0 fast paths (backtick / math-char scans skip whole passes)
     ↓
-  extractMath() — pulls LaTeX into placeholders (skipped if no math chars)
+  extractMath() — site mode only; pulls LaTeX into placeholders (skipped if no math chars)
     ↓
-  mdParser.parse(source) — converts Markdown to HTML (custom marked.Marked instance)
+  parser.parse(source) — mdParser, or standardParser in Standard mode (both marked.Marked)
     ↓
   DOMPurify.sanitize(html) — strips dangerous tags/attributes (XSS prevention)
     ↓
@@ -338,7 +358,7 @@ Uses `document.execCommand('undo')` and `document.execCommand('redo')` on the te
 
 ### Navigation & Anchors
 
-**Heading anchor links**: Every heading in the rendered preview gets an auto-generated `id` (slugified from heading text) and a hover-reveal `#` anchor link positioned to its left. Hovering a heading makes the anchor visible; clicking it smooth-scrolls to that section.
+**Heading anchor links**: Every heading in the rendered preview gets an auto-generated `id` (slugified from heading text) and a hover-reveal `#` anchor link positioned to its left. Hovering a heading makes the anchor visible; clicking it smooth-scrolls to that section. Standard Markdown mode keeps the IDs — so `#` TOC links still work — but omits the visible anchor link.
 
 **Table of Contents support**: Markdown TOCs with `#` fragment links (e.g., `[Section](#section)`) trigger smooth scrolling within the preview pane. The `handlePreviewClick` event handler intercepts clicks on `a[href^="#"]`, prevents default navigation, and calls `scrollIntoView({ behavior: 'smooth' })` on the target element.
 
@@ -357,7 +377,7 @@ Uses `document.execCommand('undo')` and `document.execCommand('redo')` on the te
 - **HTML5** — Semantic structure, ARIA labels, hidden file input
 - **CSS3** — Custom properties for theming, flexbox layout, sticky header, responsive media query at `768px`
 - **Vanilla JavaScript (ES6+)** — IIFE pattern, strict mode, arrow functions, async/await, template literals, destructuring
-- **marked.js** (latest release, jsDelivr CDN, unpinned) — Markdown-to-HTML parser via `new marked.Marked()` with custom renderer for heading anchors and link handling
+- **marked.js** (latest release, jsDelivr CDN, unpinned) — Markdown-to-HTML parser via two `new marked.Marked()` instances: site mode (heading anchors + math layer) and Standard GFM mode (no anchors, no math extraction), sharing link handling
 - **MathJax** (pinned v3.2.2, jsDelivr CDN, deferred) — LaTeX math typesetting via targeted async `MathJax.typesetPromise()` on extracted math nodes only
 - **highlight.js** (pinned v11.9.0 common bundle via `@highlightjs/cdn-assets`, jsDelivr CDN, deferred) — code syntax highlighting via `hljs.highlightElement()` on tagged fenced blocks; theme via a single swappable stylesheet; copy buttons and plain code need no library
 - **DOMPurify** (CDN v3.0.6) — HTML sanitization via `DOMPurify.sanitize()`
@@ -413,7 +433,8 @@ md_viewer/
 - Responsive: at `≤768px`, header wraps, center section goes full-width below, panes stack vertically
 
 ### Heading Anchors
-- Each heading gets a `position: relative` container with an `.anchor` link absolutely positioned to the left
+- Site mode: each heading gets a `position: relative` container with an `.anchor` link absolutely positioned to the left
+- Standard Markdown mode: headings still get slug IDs for TOC links, but no anchor element is emitted
 - Anchors are hidden by default (`opacity: 0`) and revealed on heading hover (`opacity: 1`)
 - Anchor color uses `--accent`, transition uses `--transition`
 - Slug IDs are generated client-side from heading text (lowercase, strip non-word chars, collapse spaces to hyphens)
@@ -423,7 +444,7 @@ md_viewer/
 - `elements.editor.addEventListener('input', ...)` for live preview triggering
 - `elements.editor.addEventListener('keydown', handleTabKey)` for Tab interception
 - `elements.preview.addEventListener('click', handlePreviewClick)` for TOC smooth-scroll navigation
-- Settings menu: `menuBtn` toggles the panel, flyout parents toggle side panels, option buttons apply without closing; document `pointerdown` closes on outside clicks; `settingsMenu` handles arrow-key navigation (range inputs are skipped so the spacing slider keeps Arrow/Home/End); the spacing slider updates on `input`
+- Settings menu: `menuBtn` toggles the panel, flyout parents toggle side panels, option buttons and the Standard Markdown toggle apply without closing; document `pointerdown` closes on outside clicks; `settingsMenu` handles arrow-key navigation, skipping disabled rows and range inputs (so the spacing slider keeps Arrow/Home/End); the spacing slider updates on `input`
 - Split divider: `pointerdown` (with pointer capture) starts a drag, `pointermove` updates via rAF, `pointerup` commits resize or snap, `pointercancel` aborts; `dblclick` resets; divider `keydown` handles arrows/`Enter`/`Escape`
 - Toolbar buttons and view buttons use individual `addEventListener('click', ...)`
 - File input uses `change` event
@@ -433,7 +454,7 @@ md_viewer/
 2. Textarea value changes
 3. `input` event fires → `debouncedRender()`
 4. After 100ms debounce → `requestAnimationFrame(renderPreview)`
-5. `renderPreview()` commits synchronously: reads textarea value, extracts math (fast-pathed), parses Markdown via `mdParser`, sanitizes, updates preview DOM (scroll preserved), restores math placeholders, adds copy buttons
+5. `renderPreview()` commits synchronously: reads textarea value, extracts math in site mode (fast-pathed; skipped in Standard mode), parses Markdown via `mdParser` or `standardParser`, sanitizes, updates preview DOM (scroll preserved), restores math placeholders, adds copy buttons
 6. Post-render: all external `<a>` links get `target="_blank" rel="noopener noreferrer"` injected
 7. `scheduleSave()` persists content to `localStorage` (throttled: 1.5s trailing write, flushed on tab hide/close)
 8. 250ms after the last commit → `runEnhance()`: chunked code highlighting, then MathJax typesetting of live spans only (both generation-guarded)
