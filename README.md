@@ -17,10 +17,11 @@ User Input (keyboard/toolbar) → State Update → Debounce (100ms) → Render �
 2. `loadState()` — restores theme, view mode, content, filename from `localStorage`
 3. `applyTheme()` — sets `data-theme` attribute on `<html>`
 4. `applyViewMode()` — toggles `.hidden` class on panes
-5. `configureMarked()` — creates `marked.Marked` instance with custom renderer (heading anchors, link targets)
-6. `bindEvents()` — attaches all event listeners
-7. `renderPreview()` — renders initial content
-8. `updateFilenameDisplay()` — shows filename badge if present
+5. `applyMathSpacing()` — restores the display-math spacing slider/`--math-display-gap`
+6. `configureMarked()` — creates `marked.Marked` instance with custom renderer (heading anchors, link targets)
+7. `bindEvents()` — attaches all event listeners
+8. `renderPreview()` — renders initial content
+9. `updateFilenameDisplay()` — shows filename badge if present
 
 ### State Management
 
@@ -35,6 +36,7 @@ All app state lives in a single `state` object:
 | `filename` | `string` | Name of the opened/saved file |
 | `fileHandle` | `FileSystemFileHandle \| null` | Handle for direct file writes (File System Access API) |
 | `mathMode` | `string` | `'off'`, `'inline'`, `'display'`, `'dollars'`, `'latex'`, or `'all'` |
+| `mathSpacing` | `number` | Display-equation spacing in rem, `0`–`3` (default `1`) |
 | `codeTheme` | `string` | `'auto'`, `'github'`, `'github-dark'`, `'monokai'`, `'dracula'`, or `'nord'` |
 | `zoom` | `number` | Shared content zoom, `0.5`–`2.0` (default `1`) |
 
@@ -48,6 +50,7 @@ All app state lives in a single `state` object:
 | `md-editor-content` | Editor content (auto-saved on every render) |
 | `md-editor-filename` | Last opened filename |
 | `md-editor-math-mode` | Selected math rendering mode |
+| `md-editor-math-spacing` | Display-equation spacing in rem (`0`–`3`, default `1`) |
 | `md-editor-code-theme` | Selected code highlighting theme |
 | `md-editor-zoom` | Shared content zoom level |
 
@@ -87,6 +90,8 @@ All app state lives in a single `state` object:
 | `settingsMenu` | `<div>` | Settings menu panel (`.menu`) |
 | `mathMenuBtn` | `<button>` | Math flyout parent row |
 | `mathFlyout` | `<div>` | Math mode options (`.flyout`) |
+| `mathSpacing` | `<input type="range">` | Display-math spacing slider (0–3rem) |
+| `mathSpacingValue` | `<output>` | Live slider value readout |
 | `codeMenuBtn` | `<button>` | Code Themes flyout parent row |
 | `codeFlyout` | `<div>` | Code theme options (`.flyout`) |
 | `hljsTheme` | `<link>` | Active highlight.js theme stylesheet (swapped on demand) |
@@ -219,6 +224,10 @@ Optional LaTeX math via **MathJax v3** (`tex-chtml`, pinned), enabled via the **
 
 `Ctrl+M` cycles the modes. The choice persists in `localStorage` (`md-editor-math-mode`).
 
+**Display spacing:** the bottom of the Math flyout has a **Display math spacing** slider (0–3rem, 0.25rem steps; default 1rem, matching the app's normal paragraph rhythm). It updates a `--math-display-gap` custom property on the preview live, so dragging previews immediately without a re-render. `0` makes equations flush with adjacent text; `3` is a deliberately generous maximum that stays within the preview. The value persists in `localStorage` (`md-editor-math-spacing`), and the slider's Arrow/Home/End keys adjust the value instead of moving menu focus.
+
+**Standalone display math:** a source line containing only `$$…$$` (or `\[…\]`) is normalized to its own Markdown paragraph before parsing. This keeps equations at normal text size and gives each one the slider spacing. Without this, a display-math line directly above `---` is valid Markdown for a **setext heading**, so the preceding text and formulas become one `<h2>` and the formulas inherit heading font sizes.
+
 **How it stays fast and correct:**
 - Before parsing, `extractMath()` pulls LaTeX spans into private-use Unicode placeholders (`U+E000…U+E001`, zero markdown meaning), so `marked` can't mangle them (the `*` in `$a*b$` would otherwise become emphasis). Markdown rendering stays fully synchronous on the 100ms debounce.
 - Fenced code blocks and `` `code spans` `` are never touched. Known limitation: indented (4-space) code blocks are not detected — use fenced blocks in math-heavy docs.
@@ -237,7 +246,7 @@ Fenced code blocks with an explicit language tag are syntax-highlighted via **hi
 
 ### Settings Menu
 
-File and display settings live behind the **gear button** in header-right: Open / Save / Share rows, a **Math ▸** flyout (the six math modes), a **Code Themes ▸** flyout, and the icon-only theme button. Both flyouts open leftward so they never clip off the viewport edge (on ≤480px screens they expand inline instead). Picking a math mode or code theme applies it and moves the ✓ checkmark but leaves the menu open, so more options can be tried. The menu closes only on outside click, on `Escape` (before the split-view reset), on the gear button, or on Open/Save/Share (which launch pickers/modals); arrow keys navigate rows; focus returns to the gear on dismiss.
+File and display settings live behind the **gear button** in header-right: Open / Save / Share rows, a **Math ▸** flyout (the six math modes plus the **Display math spacing** slider at the bottom), a **Code Themes ▸** flyout, and the icon-only theme button. Both flyouts open leftward so they never clip off the viewport edge (on ≤480px screens they expand inline instead). Picking a math mode or code theme applies it and moves the ✓ checkmark but leaves the menu open, so more options can be tried. The menu closes only on outside click, on `Escape` (before the split-view reset), on the gear button, or on Open/Save/Share (which launch pickers/modals); arrow keys navigate rows (the range input keeps its own Arrow/Home/End behavior); focus returns to the gear on dismiss.
 
 ### Live Preview Rendering Pipeline
 
@@ -414,7 +423,7 @@ md_viewer/
 - `elements.editor.addEventListener('input', ...)` for live preview triggering
 - `elements.editor.addEventListener('keydown', handleTabKey)` for Tab interception
 - `elements.preview.addEventListener('click', handlePreviewClick)` for TOC smooth-scroll navigation
-- Settings menu: `menuBtn` toggles the panel, flyout parents toggle side panels, option buttons apply without closing; document `pointerdown` closes on outside clicks; `settingsMenu` handles arrow-key navigation
+- Settings menu: `menuBtn` toggles the panel, flyout parents toggle side panels, option buttons apply without closing; document `pointerdown` closes on outside clicks; `settingsMenu` handles arrow-key navigation (range inputs are skipped so the spacing slider keeps Arrow/Home/End); the spacing slider updates on `input`
 - Split divider: `pointerdown` (with pointer capture) starts a drag, `pointermove` updates via rAF, `pointerup` commits resize or snap, `pointercancel` aborts; `dblclick` resets; divider `keydown` handles arrows/`Enter`/`Escape`
 - Toolbar buttons and view buttons use individual `addEventListener('click', ...)`
 - File input uses `change` event

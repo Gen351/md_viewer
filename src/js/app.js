@@ -7,6 +7,7 @@
     CONTENT: 'md-editor-content',
     FILENAME: 'md-editor-filename',
     MATH_MODE: 'md-editor-math-mode',
+    MATH_SPACING: 'md-editor-math-spacing',
     CODE_THEME: 'md-editor-code-theme',
     ZOOM: 'md-editor-zoom',
     SPLIT: 'md-editor-split'
@@ -62,6 +63,14 @@
   const ZOOM_MIN = 0.5;
   const ZOOM_MAX = 2;
 
+  // Display-math breathing room (rem), applied around display equations.
+  // 1rem matches the app's normal paragraph rhythm; 0 lets equations sit
+  // flush with the surrounding text.
+  const MATH_SPACING_DEFAULT = 1;
+  const MATH_SPACING_MIN = 0;
+  const MATH_SPACING_MAX = 3;
+  const MATH_SPACING_STEP = 0.25;
+
   // Draggable split: editor fraction clamps to [SPLIT_MIN, SPLIT_MAX];
   // pushing past either edge arms a snap-collapse of that pane.
   const SPLIT_DEFAULT = 0.5;
@@ -87,6 +96,7 @@
     filename: '',
     fileHandle: null,
     mathMode: MATH_MODES.DISPLAY,
+    mathSpacing: MATH_SPACING_DEFAULT,
     codeTheme: CODE_THEMES.AUTO,
     zoom: ZOOM_DEFAULT,
     split: SPLIT_DEFAULT
@@ -127,6 +137,8 @@
     settingsMenu: null,
     mathMenuBtn: null,
     mathFlyout: null,
+    mathSpacing: null,
+    mathSpacingValue: null,
     codeMenuBtn: null,
     codeFlyout: null,
     hljsTheme: null,
@@ -174,6 +186,7 @@
     applyViewMode();
     applyZoom();
     applyMathMode();
+    applyMathSpacing();
     applyCodeTheme();
     configureMarked();
     configureHljs();
@@ -250,6 +263,8 @@
     elements.settingsMenu = document.getElementById('settingsMenu');
     elements.mathMenuBtn = document.getElementById('mathMenuBtn');
     elements.mathFlyout = document.getElementById('mathFlyout');
+    elements.mathSpacing = document.getElementById('mathSpacing');
+    elements.mathSpacingValue = document.getElementById('mathSpacingValue');
     elements.codeMenuBtn = document.getElementById('codeMenuBtn');
     elements.codeFlyout = document.getElementById('codeFlyout');
     elements.hljsTheme = document.getElementById('hljsTheme');
@@ -275,6 +290,8 @@
     state.split = Number.isFinite(savedSplit)
       ? Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, savedSplit))
       : SPLIT_DEFAULT;
+    const savedMathSpacing = parseFloat(localStorage.getItem(STORAGE_KEYS.MATH_SPACING));
+    state.mathSpacing = normalizeMathSpacing(savedMathSpacing);
 
     // Check if content was passed via URL hash (cross-origin import).
     // Supports both legacy #content= (percent-encoded) and compressed #z=1.
@@ -630,6 +647,34 @@
     localStorage.setItem(STORAGE_KEYS.MATH_MODE, state.mathMode);
   }
 
+  // Clamps a spacing value to the slider range and snaps it to a slider step,
+  // so stored/imported values always map to a reachable position.
+  function normalizeMathSpacing(value) {
+    if (!Number.isFinite(value)) return MATH_SPACING_DEFAULT;
+    const clamped = Math.min(MATH_SPACING_MAX, Math.max(MATH_SPACING_MIN, value));
+    return Math.round(clamped / MATH_SPACING_STEP) * MATH_SPACING_STEP;
+  }
+
+  function formatMathSpacing(value) {
+    return value + 'rem';
+  }
+
+  function applyMathSpacing() {
+    const value = normalizeMathSpacing(state.mathSpacing);
+    state.mathSpacing = value;
+    if (elements.preview) {
+      elements.preview.style.setProperty('--math-display-gap', value + 'rem');
+    }
+    if (elements.mathSpacing) {
+      elements.mathSpacing.value = String(value);
+      elements.mathSpacing.setAttribute('aria-valuetext', formatMathSpacing(value));
+    }
+    if (elements.mathSpacingValue) {
+      elements.mathSpacingValue.textContent = formatMathSpacing(value);
+    }
+    localStorage.setItem(STORAGE_KEYS.MATH_SPACING, String(value));
+  }
+
   // Marks the active option in a flyout (checkmark + aria-checked).
   function syncFlyoutSelection(flyout, value) {
     if (!flyout) return;
@@ -680,6 +725,11 @@
     state.mathMode = mode;
     applyMathMode();
     renderPreview();
+  }
+
+  function setMathSpacing(value) {
+    state.mathSpacing = normalizeMathSpacing(parseFloat(value));
+    applyMathSpacing();
   }
 
   function cycleMathMode() {
@@ -737,6 +787,9 @@
   }
 
   function handleMenuKeys(e) {
+    // Range inputs own Arrow/Home/End so the spacing slider can be adjusted
+    // from the keyboard instead of moving menu focus.
+    if (e.target instanceof HTMLInputElement) return;
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
     const items = Array.from(elements.settingsMenu.querySelectorAll('button'))
       .filter(b => b.offsetParent !== null);
@@ -973,6 +1026,42 @@
 
   const MATH_TOKEN_RE = /\uE000MATH(\d+)\uE001/g;
 
+  // Display math is block-level, but Markdown only gives it its own paragraph
+  // when blank lines surround the source line. Without them, a line such as
+  // "$$x$$" merges with the text above — and if the next line is "---", the
+  // whole block becomes a setext heading and every formula inherits heading
+  // font sizes. Isolate standalone display-math lines before parsing so they
+  // keep normal text size and the spacing slider applies per equation.
+  function isolateDisplayMathLines(source) {
+    if (!pendingMaths.some(math => math.display)) return source;
+    const lines = source.split('\n');
+    const out = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (!isDisplayMathOnlyLine(line)) {
+        out.push(line);
+        continue;
+      }
+      if (out.length && out[out.length - 1].trim() !== '') out.push('');
+      out.push(line);
+      if (i + 1 < lines.length && lines[i + 1].trim() !== '') out.push('');
+    }
+    return out.join('\n');
+  }
+
+  function isDisplayMathOnlyLine(line) {
+    let hasDisplay = false;
+    const rest = line.replace(MATH_TOKEN_RE, (token, id) => {
+      const math = pendingMaths[Number(id)];
+      if (math && math.display) {
+        hasDisplay = true;
+        return '';
+      }
+      return token;
+    });
+    return hasDisplay && rest.trim() === '';
+  }
+
   // Swaps placeholder tokens back for real <span> nodes holding the raw
   // TeX wrapped in \(...\) / \[...\], then hands them to MathJax. Nodes
   // are built with textContent (never innerHTML), and typesetting happens
@@ -1131,8 +1220,8 @@
       // Tier-0 fast path: skip extraction entirely when no math chars exist.
       if (hasMathChars(content, flags)) {
         const extracted = extractMath(content, flags);
-        source = extracted.text;
         pendingMaths = extracted.maths;
+        source = isolateDisplayMathLines(extracted.text);
       }
     }
 
@@ -1544,6 +1633,7 @@
     });
     elements.paneDivider.addEventListener('keydown', handleDividerKeys);
     elements.mathMenuBtn.addEventListener('click', () => toggleFlyout(elements.mathMenuBtn, elements.mathFlyout));
+    elements.mathSpacing.addEventListener('input', () => setMathSpacing(elements.mathSpacing.value));
     elements.codeMenuBtn.addEventListener('click', () => toggleFlyout(elements.codeMenuBtn, elements.codeFlyout));
     elements.mathFlyout.querySelectorAll('[data-value]').forEach(opt => {
       // Menu lingers: applying an option keeps the menu + flyout open so

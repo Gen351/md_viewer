@@ -110,6 +110,13 @@
               <button class="menu-item flyout-option" role="menuitemradio" aria-checked="false" data-value="dollars">$ + $$</button>
               <button class="menu-item flyout-option" role="menuitemradio" aria-checked="false" data-value="latex">\( \) / \[ \]</button>
               <button class="menu-item flyout-option" role="menuitemradio" aria-checked="false" data-value="all">All</button>
+              <div class="math-spacing" role="group" aria-labelledby="mathSpacingLabel">
+                <div class="math-spacing-header">
+                  <label class="math-spacing-label" id="mathSpacingLabel" for="mathSpacing">Display math spacing</label>
+                  <output class="math-spacing-value" id="mathSpacingValue" for="mathSpacing">1rem</output>
+                </div>
+                <input class="math-spacing-slider" type="range" id="mathSpacing" min="0" max="3" step="0.25" value="1" aria-labelledby="mathSpacingLabel">
+              </div>
             </div>
           </div>
           <div class="menu-flyout-wrapper">
