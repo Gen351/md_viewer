@@ -735,8 +735,9 @@ body {
 .preview .math-display {
   display: block;
   text-align: center;
-  margin: 1rem 0;
-  padding: 0.25rem 0;
+  /* Modest spacing: surrounding <p> margins still provide ~1rem, so the
+     old 1rem margin + 0.25rem padding made display math feel detached. */
+  margin: 0.5rem 0;
   overflow-x: auto;
   overflow-y: hidden;
 }
@@ -747,7 +748,10 @@ body {
   max-width: 100%;
 }
 
-.preview mjx-container[display="true"] {
+/* MathJax's own stylesheet gives display containers a 1em block margin.
+   This selector outranks it (3 class-level selectors vs 2) so spacing is
+   controlled only by .math-display + the surrounding paragraph margin. */
+.preview .math-display mjx-container[jax="CHTML"][display="true"] {
   margin: 0;
 }
 
