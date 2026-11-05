@@ -184,17 +184,18 @@ Shortcut handlers call `e.preventDefault()` to suppress default browser behavior
 ### Sharing & Link Import
 
 **Share** (`shareFile`):
-1. Builds a share link from the page URL plus a URL fragment: `#content=<encoded>&filename=<encoded>`
+1. Builds a share link from the page URL plus a URL fragment. Content is **DEFLATE-compressed** (native `CompressionStream`, no dependencies) and **base64url-encoded** as `#z=1.<payload>&filename=<encoded>` when that produces a shorter link; tiny docs or unsupported browsers fall back to the legacy `#content=<encoded>&filename=<encoded>` form
 2. Content travels only in the fragment — never sent to any server — so links work for both hosted and `file://` URLs
-3. If the link would exceed `SHARE_URL_MAX_LENGTH` (8,000 chars), a modal explains the file is too big to share by link and suggests saving the `.md` file instead
+3. If the final link would exceed `SHARE_URL_MAX_LENGTH` (15,000 chars, after compression), a modal explains the file is too big to share by link and suggests saving the `.md` file instead. Very long links may be truncated by chat apps (e.g. Discord) — email or a direct browser paste is safer
 4. Copies the link via `navigator.clipboard`, with a hidden-textarea + `execCommand('copy')` fallback for non-secure contexts like `file://`
 5. If the clipboard is blocked, the link is placed in the address bar and a modal tells the user to copy it manually
 6. On success the Share button flashes "Copied!" for 1.5s
 
 **Link import** (`loadState`, on load):
-1. Checks whether the URL hash carries `content` / `filename` params (`URLSearchParams` decodes exactly once — a second `decodeURIComponent` would break content containing literal `%`)
+1. Checks whether the URL hash carries `z` (compressed, versioned) or `content` / `filename` params (`URLSearchParams` decodes exactly once — a second `decodeURIComponent` would break legacy content containing literal `%`)
 2. If found: imports content + filename into state, opens **view-only** mode (the recipient sees a rendered copy first and can switch to Split/Focus to edit), persists to `localStorage`, and strips the hash with `history.replaceState` so refreshing the page does not overwrite later edits
-3. This is also the cross-origin hand-off used by other apps to send text in — see `docs/instruction.md` for the InPlainSite integration guide
+3. If a compressed link is corrupted, truncated, or unsupported, a modal is shown and the existing local document is left unchanged
+4. Legacy `#content=` links still load unchanged. This is also the cross-origin hand-off used by other apps to send text in.
 
 ### Scroll Sync
 
@@ -383,7 +384,9 @@ md_viewer/
 │       └── app.js          # All application logic in a single IIFE
 ├── docs/
 │   ├── DEVELOPMENT_PLAN.md # Phased build plan (completed)
-│   ├── instruction.md      # InPlainSite → share-link integration guide
+│   ├── firebase_sharing_auth_instruction_dev.md   # Firebase setup (developer)
+│   ├── firebase_sharing_auth_instruction_agent.md # Agent implementation instructions
+│   ├── firebase_sharing_plan.md                   # Trackable implementation plan
 │   └── MARKDOWN_VIEWER_EDITOR.md  # Initial design brief
 ├── README.md               # This file
 └── AGENTS.md               # AI agent instructions and project conventions

@@ -70,11 +70,15 @@
   const SPLIT_KEY_STEP = 0.02;
 
   // Max total length (chars) of a generated share link. The file travels in
-  // the URL fragment, which is never sent to a server, so only browser-side
-  // limits apply (Chromium hard cap: 2MB; Firefox history: 2000 chars;
-  // Safari: effectively uncapped). 8000 stays safe everywhere and pastes
-  // cleanly into chat apps.
-  const SHARE_URL_MAX_LENGTH = 8000;
+  // the URL fragment (never sent to a server), so only browser/app limits
+  // apply. Links are DEFLATE-compressed + base64url when beneficial; the
+  // 15000-char cap is measured on the final link. Chat apps may truncate
+  // very long links, so the modal still recommends saving the .md file.
+  const SHARE_URL_MAX_LENGTH = 15000;
+  const SHARE_COMPRESS_MIN = 256;            // skip compressing tiny docs
+  const SHARE_FORMAT_VERSION = '1';          // #z=<version>.<payload> (DEFLATE)
+  const SHARE_COMPRESSED_MAX = 30000;        // max base64url payload accepted
+  const SHARE_DECOMPRESSED_MAX = 5 * 1024 * 1024; // 5 MB output ceiling
 
   const state = {
     viewMode: VIEW_MODES.SPLIT,
@@ -163,9 +167,9 @@
   let renderGen = 0;
   let enhanceTimer = null;
 
-  function init() {
+  async function init() {
     cacheElements();
-    loadState();
+    await loadState();
     applyTheme();
     applyViewMode();
     applyZoom();
@@ -252,7 +256,7 @@
     elements.hljsScript = document.getElementById('hljsScript');
   }
 
-  function loadState() {
+  async function loadState() {
     state.theme = localStorage.getItem(STORAGE_KEYS.THEME) || 'light';
     state.viewMode = localStorage.getItem(STORAGE_KEYS.VIEW_MODE) || VIEW_MODES.SPLIT;
     state.mathMode = localStorage.getItem(STORAGE_KEYS.MATH_MODE) || MATH_MODES.DISPLAY;
@@ -272,30 +276,43 @@
       ? Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, savedSplit))
       : SPLIT_DEFAULT;
 
-    // Check if content was passed via URL hash (cross-origin import)
-    let hashContent = '';
-    let hashFilename = '';
+    // Check if content was passed via URL hash (cross-origin import).
+    // Supports both legacy #content= (percent-encoded) and compressed #z=1.
+    let sharedContent = '';
+    let sharedFilename = '';
+    let shareError = null;
     try {
       const hash = window.location.hash.substring(1);
       if (hash) {
-        // URLSearchParams.get() already percent-decodes once. Do NOT wrap
-        // it in decodeURIComponent(): a literal '%' in the content (e.g.
-        // "100% sure") would throw URIError and silently drop the import.
         const params = new URLSearchParams(hash);
-        if (params.has('content')) {
-          hashContent = params.get('content') || '';
+        if (params.has('z')) {
+          const packed = params.get('z') || '';
+          const dot = packed.indexOf('.');
+          if (dot < 0 || packed.slice(0, dot) !== SHARE_FORMAT_VERSION) {
+            throw new Error('Unsupported shared-link version');
+          }
+          if (packed.length > SHARE_COMPRESSED_MAX) {
+            throw new Error('Shared link payload is too large');
+          }
+          sharedContent = await decompressFromBase64Url(packed.slice(dot + 1));
+        } else if (params.has('content')) {
+          // URLSearchParams.get() already percent-decodes once. Do NOT wrap
+          // it in decodeURIComponent(): a literal '%' in the content (e.g.
+          // "100% sure") would throw URIError and silently drop the import.
+          sharedContent = params.get('content') || '';
         }
         if (params.has('filename')) {
-          hashFilename = params.get('filename') || '';
+          sharedFilename = params.get('filename') || '';
         }
       }
     } catch (e) {
-      console.error('Failed to parse content from URL hash:', e);
+      console.error('Failed to parse shared link:', e);
+      shareError = e;
     }
 
-    if (hashContent) {
-      state.content = hashContent;
-      state.filename = hashFilename || 'imported.md';
+    if (sharedContent) {
+      state.content = sharedContent;
+      state.filename = sharedFilename || 'imported.md';
       // Shared links open on the rendered preview: the recipient gets a
       // readable copy first and can switch to Split/Focus to edit.
       // applyViewMode() (called after loadState in init) persists this.
@@ -311,6 +328,12 @@
     }
 
     elements.editor.value = state.content;
+    if (shareError) {
+      openShareModal(
+        'Could not open shared link',
+        'The link may be corrupted, truncated, or from a newer version. Your local document is unchanged.'
+      );
+    }
   }
 
   function saveState() {
@@ -1248,12 +1271,87 @@
     URL.revokeObjectURL(url);
   }
 
-  function buildShareLink(content, filename) {
+  // Share link compression (native DEFLATE, no dependencies). Payloads
+  // are base64url-encoded so they add no percent-encoding bloat to the URL.
+  let compressionSupport = null;
+
+  function compressionSupported() {
+    if (compressionSupport !== null) return compressionSupport;
+    try {
+      new CompressionStream('deflate');
+      new DecompressionStream('deflate');
+      compressionSupport = true;
+    } catch (_) {
+      compressionSupport = false;
+    }
+    return compressionSupport;
+  }
+
+  function bytesToBase64Url(bytes) {
+    let binary = '';
+    const CHUNK = 0x8000; // avoid call-stack blowups on large payloads
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+    }
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  function base64UrlToBytes(value) {
+    const b64 = value.replace(/-/g, '+').replace(/_/g, '/') +
+      '='.repeat((4 - (value.length % 4)) % 4);
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+
+  async function compressToBase64Url(text) {
+    const stream = new Blob([new TextEncoder().encode(text)])
+      .stream().pipeThrough(new CompressionStream('deflate'));
+    return bytesToBase64Url(new Uint8Array(await new Response(stream).arrayBuffer()));
+  }
+
+  async function decompressFromBase64Url(payload) {
+    const stream = new Blob([base64UrlToBytes(payload)])
+      .stream().pipeThrough(new DecompressionStream('deflate'));
+    const reader = stream.getReader();
+    const chunks = [];
+    let total = 0;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > SHARE_DECOMPRESSED_MAX) {
+        await reader.cancel();
+        throw new Error('Shared document exceeds the decompressed size limit');
+      }
+      chunks.push(value);
+    }
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) { out.set(chunk, offset); offset += chunk.byteLength; }
+    return new TextDecoder().decode(out);
+  }
+
+  async function buildShareLink(content, filename) {
     // Strip any existing hash so the base works for both hosted
     // (https://…/index.html) and file:// URLs.
     const base = window.location.href.split('#')[0];
-    return base + '#content=' + encodeURIComponent(content) +
-      '&filename=' + encodeURIComponent(filename);
+    const suffix = '&filename=' + encodeURIComponent(filename);
+    const raw = base + '#content=' + encodeURIComponent(content) + suffix;
+
+    // Try DEFLATE + base64url; pick whichever is shorter. Compression is
+    // skipped for tiny docs and when the API is unavailable/throws.
+    if (compressionSupported() && content.length >= SHARE_COMPRESS_MIN) {
+      try {
+        const packed = base + '#z=' + SHARE_FORMAT_VERSION + '.' +
+          await compressToBase64Url(content) + suffix;
+        if (packed.length < raw.length) return packed;
+      } catch (e) {
+        console.error('Share compression failed; using uncompressed link:', e);
+      }
+    }
+    return raw;
   }
 
   async function copyText(text) {
@@ -1298,13 +1396,20 @@
     }
 
     const filename = state.filename || 'untitled.md';
-    const link = buildShareLink(content, filename);
+    let link;
+    try {
+      link = await buildShareLink(content, filename);
+    } catch (e) {
+      console.error('Failed to build share link:', e);
+      openShareModal('Could not create share link', 'An unexpected error occurred while creating the link. Save the .md file and send it instead.');
+      return;
+    }
 
     if (link.length > SHARE_URL_MAX_LENGTH) {
       openShareModal(
         'File too big to share with a link',
         'This file would make a ' + link.length.toLocaleString() + '-character link, ' +
-        'but links are limited to ' + SHARE_URL_MAX_LENGTH.toLocaleString() + ' characters. ' +
+        'but links are limited to ' + SHARE_URL_MAX_LENGTH.toLocaleString() + ' characters (even after compression). ' +
         'Save it as a .md file and send the file instead.'
       );
       return;
@@ -1316,7 +1421,7 @@
     } catch (e) {
       // Last resort: put the link in the address bar so it can be copied manually.
       window.location.hash = link.substring(link.indexOf('#') + 1);
-      openShareModal('Could not copy automatically', 'Your browser blocked copying, so the share link was placed in the address bar instead — copy it from there manually.');
+      openShareModal('Could not copy automatically', 'Your browser blocked copying, so the share link was placed in the address bar instead — copy it from there manually. Very long links may be truncated by chat apps; email or a browser paste is safest.');
     }
   }
 
